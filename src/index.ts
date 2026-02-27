@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { Command } from 'commander';
 import { readCliEnv } from '@prodinfos/config';
 import {
@@ -36,6 +37,46 @@ type CollectClientOptions = {
 };
 
 type SetupAgent = 'codex' | 'claude' | 'openclaw';
+type SkillInstallTarget = 'codex_claude' | 'openclaw';
+
+type SkillInstallResult = {
+  target: SkillInstallTarget;
+  ok: boolean;
+  skipped: boolean;
+  detail: string;
+};
+
+type SetupLoginResult = {
+  ok: boolean;
+  skipped?: boolean;
+  mode?: 'direct_token' | 'clerk_exchange' | 'existing_token';
+  tokenStorage?: 'config_file' | 'system_keychain';
+  tenantId?: unknown;
+  projectIds?: unknown;
+};
+
+type SetupExecutionOptions = {
+  token?: string;
+  clerkJwt?: string;
+  skipLogin?: boolean;
+  skipSkills?: boolean;
+  agents: SetupAgent[];
+  autoSkillUpdate?: boolean;
+};
+
+type SetupExecutionResult = {
+  ok: true;
+  apiUrl: string;
+  configPath: string;
+  login: SetupLoginResult;
+  skillSetup: SkillInstallResult[];
+  autoSkillUpdate: boolean;
+  setupCompletedAt?: string;
+};
+
+type PromptClient = {
+  question: (query: string) => Promise<string>;
+};
 
 type CommandRunResult = {
   ok: boolean;
@@ -50,6 +91,7 @@ const CLI_VERSION = '0.1.0';
 const SKILL_ID = 'prodinfos';
 const SKILL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const SKILL_SYNC_TIMEOUT_MS = 4000;
+const OPENCLAW_SKILL_PAGE_URL = 'https://clawhub.ai/skills/prodinfos';
 const KEYCHAIN_SERVICE = 'com.prodinfos.cli.token';
 const KEYCHAIN_ACCOUNT = process.env.USER ?? process.env.USERNAME ?? 'default';
 const SELF_TRACKING_ENDPOINT = env.PRODINFOS_SELF_TRACKING_ENDPOINT?.replace(/\/$/, '');
@@ -259,15 +301,8 @@ const parseSetupAgents = (value: string): SetupAgent[] => {
   return result;
 };
 
-const installAgentSkills = (
-  agents: SetupAgent[],
-): Array<{ target: 'codex_claude' | 'openclaw'; ok: boolean; skipped: boolean; detail: string }> => {
-  const results: Array<{
-    target: 'codex_claude' | 'openclaw';
-    ok: boolean;
-    skipped: boolean;
-    detail: string;
-  }> = [];
+const installAgentSkills = (agents: SetupAgent[]): SkillInstallResult[] => {
+  const results: SkillInstallResult[] = [];
 
   if (agents.includes('codex') || agents.includes('claude')) {
     if (!isCommandAvailable('npx')) {
@@ -298,7 +333,7 @@ const installAgentSkills = (
         target: 'openclaw',
         ok: false,
         skipped: true,
-        detail: '`openclaw` not found. Install OpenClaw first.',
+        detail: `\`openclaw\` not found. Install OpenClaw first or use ${OPENCLAW_SKILL_PAGE_URL}.`,
       });
     } else {
       const install = runCommand('openclaw', ['skill', 'add', SKILL_ID], { timeoutMs: 120_000 });
@@ -318,8 +353,177 @@ const installAgentSkills = (
   return results;
 };
 
+const renderSetupTextSummary = (label: string, result: SetupExecutionResult): string => {
+  const lines = [
+    label,
+    `- Login: ${String(result.login.mode ?? 'skipped')}`,
+    `- Auto skill update: ${result.autoSkillUpdate ? 'enabled' : 'disabled'}`,
+    `- Config: ${result.configPath}`,
+  ];
+
+  for (const entry of result.skillSetup) {
+    lines.push(`- Skills (${entry.target}): ${entry.ok ? 'ok' : entry.skipped ? 'skipped' : 'failed'}`);
+  }
+
+  return lines.join('\n');
+};
+
+const runSetupFlow = async (
+  root: { apiUrl?: string; token?: string },
+  options: SetupExecutionOptions,
+): Promise<SetupExecutionResult> => {
+  const initialConfig = await readConfig();
+  const apiUrl = (root.apiUrl ?? initialConfig.apiUrl).replace(/\/$/, '');
+  const skillResults = options.skipSkills ? [] : installAgentSkills(options.agents);
+
+  let activeConfig = initialConfig;
+  let loginResult: SetupLoginResult = {
+    ok: true,
+    skipped: true,
+  };
+
+  if (!options.skipLogin) {
+    if (options.token) {
+      const persisted = await persistAuthToken(activeConfig, apiUrl, options.token);
+      activeConfig = persisted.config;
+      loginResult = {
+        ok: true,
+        mode: 'direct_token',
+        tokenStorage: persisted.storage,
+      };
+    } else if (options.clerkJwt) {
+      const exchanged = await exchangeClerkJwtForReadonlyToken(apiUrl, options.clerkJwt);
+      const persisted = await persistAuthToken(activeConfig, apiUrl, exchanged.token);
+      activeConfig = persisted.config;
+      loginResult = {
+        ok: true,
+        mode: 'clerk_exchange',
+        tokenStorage: persisted.storage,
+        tenantId: exchanged.tenantId,
+        projectIds: exchanged.projectIds,
+      };
+    } else if (resolveAuthToken(activeConfig, root.token)) {
+      loginResult = {
+        ok: true,
+        mode: 'existing_token',
+        tokenStorage: activeConfig.tokenStorage ?? 'config_file',
+      };
+    } else {
+      throw Object.assign(
+        new Error(
+          'Provide --token or --clerk-jwt for setup login, or pass --skip-login if you want skills only.',
+        ),
+        { exitCode: 2 },
+      );
+    }
+  }
+
+  const now = new Date().toISOString();
+  const autoSkillUpdateEnabled = options.autoSkillUpdate !== false;
+  const finalConfig: CliConfig = {
+    ...activeConfig,
+    apiUrl,
+    skillAutoUpdate: autoSkillUpdateEnabled,
+    setupCompletedAt: activeConfig.setupCompletedAt ?? now,
+    lastSkillSyncAt: options.skipSkills ? activeConfig.lastSkillSyncAt : now,
+    updatedAt: now,
+  };
+  await writeConfigValue(finalConfig);
+
+  return {
+    ok: true,
+    apiUrl,
+    configPath,
+    login: loginResult,
+    skillSetup: skillResults,
+    autoSkillUpdate: finalConfig.skillAutoUpdate ?? false,
+    setupCompletedAt: finalConfig.setupCompletedAt,
+  };
+};
+
+const promptYesNo = async (rl: PromptClient, question: string, defaultValue: boolean): Promise<boolean> => {
+  const suffix = defaultValue ? '[Y/n]' : '[y/N]';
+  while (true) {
+    const answer = (await rl.question(`${question} ${suffix} `)).trim().toLowerCase();
+    if (!answer) {
+      return defaultValue;
+    }
+    if (answer === 'y' || answer === 'yes') {
+      return true;
+    }
+    if (answer === 'n' || answer === 'no') {
+      return false;
+    }
+
+    process.stdout.write('Please answer with y or n.\n');
+  }
+};
+
+const promptRequiredValue = async (rl: PromptClient, question: string): Promise<string> => {
+  while (true) {
+    const answer = (await rl.question(`${question} `)).trim();
+    if (answer) {
+      return answer;
+    }
+    process.stdout.write('Value is required.\n');
+  }
+};
+
+const promptLoginMode = async (
+  rl: PromptClient,
+  hasExistingToken: boolean,
+): Promise<'token' | 'clerk' | 'existing' | 'skip'> => {
+  while (true) {
+    process.stdout.write('\nLogin method:\n');
+    process.stdout.write('  1) Readonly token\n');
+    process.stdout.write('  2) Clerk JWT\n');
+    if (hasExistingToken) {
+      process.stdout.write('  3) Use existing token\n');
+      process.stdout.write('  4) Skip for now\n');
+    } else {
+      process.stdout.write('  3) Skip for now\n');
+    }
+
+    const maxChoice = hasExistingToken ? 4 : 3;
+    const defaultChoice = hasExistingToken ? '3' : '1';
+    const answer = (await rl.question(`Select [1-${maxChoice}] (default ${defaultChoice}): `)).trim();
+    const choice = answer || defaultChoice;
+
+    if (choice === '1') {
+      return 'token';
+    }
+    if (choice === '2') {
+      return 'clerk';
+    }
+    if (choice === '3' && hasExistingToken) {
+      return 'existing';
+    }
+    if (choice === '3' || choice === '4') {
+      return 'skip';
+    }
+
+    process.stdout.write('Invalid selection.\n');
+  }
+};
+
+const openExternalUrl = (url: string): CommandRunResult | null => {
+  if (process.platform === 'darwin') {
+    return runCommand('open', [url], { timeoutMs: 5000 });
+  }
+
+  if (process.platform === 'linux') {
+    return runCommand('xdg-open', [url], { timeoutMs: 5000 });
+  }
+
+  if (process.platform === 'win32') {
+    return runCommand('cmd', ['/c', 'start', '', url], { timeoutMs: 5000 });
+  }
+
+  return null;
+};
+
 const maybeAutoRefreshSkills = async (commandPath: string): Promise<void> => {
-  if (commandPath === 'setup') {
+  if (commandPath === 'setup' || commandPath === 'onboard') {
     return;
   }
 
@@ -745,90 +949,135 @@ program
     }) => {
       await withErrorHandling(async () => {
         const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
-        const initialConfig = await readConfig();
-        const apiUrl = (root.apiUrl ?? initialConfig.apiUrl).replace(/\/$/, '');
         const agents = parseSetupAgents(String(options.agents ?? 'all'));
-
-        const skillResults = options.skipSkills ? [] : installAgentSkills(agents);
-        let activeConfig = initialConfig;
-        let loginResult: Record<string, unknown> = {
-          ok: true,
-          skipped: true,
-        };
-
-        if (!options.skipLogin) {
-          if (options.token) {
-            const persisted = await persistAuthToken(activeConfig, apiUrl, options.token);
-            activeConfig = persisted.config;
-            loginResult = {
-              ok: true,
-              mode: 'direct_token',
-              tokenStorage: persisted.storage,
-            };
-          } else if (options.clerkJwt) {
-            const exchanged = await exchangeClerkJwtForReadonlyToken(apiUrl, options.clerkJwt);
-            const persisted = await persistAuthToken(activeConfig, apiUrl, exchanged.token);
-            activeConfig = persisted.config;
-            loginResult = {
-              ok: true,
-              mode: 'clerk_exchange',
-              tokenStorage: persisted.storage,
-              tenantId: exchanged.tenantId,
-              projectIds: exchanged.projectIds,
-            };
-          } else if (resolveAuthToken(activeConfig, root.token)) {
-            loginResult = {
-              ok: true,
-              mode: 'existing_token',
-              tokenStorage: activeConfig.tokenStorage ?? 'config_file',
-            };
-          } else {
-            throw Object.assign(
-              new Error(
-                'Provide --token or --clerk-jwt for setup login, or pass --skip-login if you want skills only.',
-              ),
-              { exitCode: 2 },
-            );
-          }
-        }
-
-        const now = new Date().toISOString();
-        const autoSkillUpdateEnabled = options.autoSkillUpdate !== false;
-        const finalConfig: CliConfig = {
-          ...activeConfig,
-          apiUrl,
-          skillAutoUpdate: autoSkillUpdateEnabled,
-          setupCompletedAt: activeConfig.setupCompletedAt ?? now,
-          lastSkillSyncAt: options.skipSkills ? activeConfig.lastSkillSyncAt : now,
-          updatedAt: now,
-        };
-        await writeConfigValue(finalConfig);
+        const result = await runSetupFlow(root, {
+          token: options.token,
+          clerkJwt: options.clerkJwt,
+          skipLogin: options.skipLogin,
+          skipSkills: options.skipSkills,
+          agents,
+          autoSkillUpdate: options.autoSkillUpdate,
+        });
 
         if (root.format === 'text') {
-          const lines = [
-            'Setup complete.',
-            `- Login: ${String(loginResult.mode ?? 'skipped')}`,
-            `- Auto skill update: ${finalConfig.skillAutoUpdate ? 'enabled' : 'disabled'}`,
-            `- Config: ${configPath}`,
-          ];
-
-          for (const entry of skillResults) {
-            lines.push(`- Skills (${entry.target}): ${entry.ok ? 'ok' : entry.skipped ? 'skipped' : 'failed'}`);
-          }
-
-          print('text', lines.join('\n'));
+          print('text', renderSetupTextSummary('Setup complete.', result));
           return;
         }
 
-        print(root.format, {
-          ok: true,
-          apiUrl,
-          configPath,
-          login: loginResult,
-          skillSetup: skillResults,
-          autoSkillUpdate: finalConfig.skillAutoUpdate,
-          setupCompletedAt: finalConfig.setupCompletedAt,
+        print(root.format, result);
+      });
+    },
+  );
+
+program
+  .command('onboard')
+  .description('Interactive onboarding: choose skill install targets and login method')
+  .option('--token <token>', 'Readonly token for login')
+  .option('--clerk-jwt <jwt>', 'Clerk JWT to exchange for a readonly token')
+  .option('--no-auto-skill-update', 'Disable daily skill refresh on CLI execution')
+  .action(
+    async (options: {
+      token?: string;
+      clerkJwt?: string;
+      autoSkillUpdate?: boolean;
+    }) => {
+      await withErrorHandling(async () => {
+        const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          throw Object.assign(
+            new Error('`onboard` requires an interactive terminal. Use `prodinfos setup` for non-interactive flows.'),
+            { exitCode: 2 },
+          );
+        }
+
+        const selectedAgents: SetupAgent[] = [];
+        let token = options.token;
+        let clerkJwt = options.clerkJwt;
+        let skipLogin = false;
+        let autoSkillUpdate = options.autoSkillUpdate;
+        const rl = createInterface({
+          input: process.stdin,
+          output: process.stdout,
         });
+
+        try {
+          process.stdout.write('Prodinfos onboarding\n');
+          process.stdout.write('This flow installs skills and configures login.\n\n');
+
+          const installCodexClaude = await promptYesNo(
+            rl,
+            'Install skill for Codex/Claude Code via `npx -y skills add prodinfos`?',
+            true,
+          );
+          if (installCodexClaude) {
+            selectedAgents.push('codex', 'claude');
+          }
+
+          const installOpenclaw = await promptYesNo(
+            rl,
+            'Install skill for OpenClaw via `openclaw skill add prodinfos`?',
+            false,
+          );
+          if (installOpenclaw) {
+            selectedAgents.push('openclaw');
+            if (!isCommandAvailable('openclaw')) {
+              process.stdout.write('\n`openclaw` is not installed on this machine.\n');
+              const openSkillPage = await promptYesNo(
+                rl,
+                `Open OpenClaw skill page now (${OPENCLAW_SKILL_PAGE_URL})?`,
+                true,
+              );
+              if (openSkillPage) {
+                const openResult = openExternalUrl(OPENCLAW_SKILL_PAGE_URL);
+                if (!openResult) {
+                  process.stdout.write(`Could not auto-open browser. Open this URL manually: ${OPENCLAW_SKILL_PAGE_URL}\n`);
+                } else if (!openResult.ok) {
+                  process.stdout.write(
+                    `Failed to open browser automatically. Open this URL manually: ${OPENCLAW_SKILL_PAGE_URL}\n`,
+                  );
+                }
+              }
+            }
+          }
+
+          if (!token && !clerkJwt) {
+            const config = await readConfig();
+            const hasExistingToken = Boolean(resolveAuthToken(config, root.token));
+            const loginMode = await promptLoginMode(rl, hasExistingToken);
+
+            if (loginMode === 'token') {
+              token = await promptRequiredValue(rl, 'Enter readonly token:');
+            } else if (loginMode === 'clerk') {
+              clerkJwt = await promptRequiredValue(rl, 'Enter Clerk JWT:');
+            } else if (loginMode === 'skip') {
+              skipLogin = true;
+            }
+          }
+
+          if (autoSkillUpdate !== false) {
+            autoSkillUpdate = await promptYesNo(rl, 'Enable daily automatic skill refresh?', true);
+          }
+        } finally {
+          rl.close();
+        }
+
+        const shouldSkipSkills = selectedAgents.length === 0;
+        const result = await runSetupFlow(root, {
+          token,
+          clerkJwt,
+          skipLogin,
+          skipSkills: shouldSkipSkills,
+          agents: shouldSkipSkills ? ['codex'] : selectedAgents,
+          autoSkillUpdate,
+        });
+
+        if (root.format === 'text') {
+          print('text', renderSetupTextSummary('Onboarding complete.', result));
+          return;
+        }
+
+        print(root.format, result);
       });
     },
   );
