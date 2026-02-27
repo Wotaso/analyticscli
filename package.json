@@ -1,10 +1,12 @@
 {
   "name": "@prodinfos/cli",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "bin": {
-    "prodinfos": "dist/index.js"
+    "prodinfos": "dist/apps/cli/src/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

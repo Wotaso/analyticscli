@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Command } from 'commander';
@@ -15,6 +16,10 @@ import {
 type CliConfig = {
   apiUrl: string;
   token?: string;
+  tokenStorage?: 'config_file' | 'system_keychain';
+  skillAutoUpdate?: boolean;
+  lastSkillSyncAt?: string;
+  setupCompletedAt?: string;
   updatedAt: string;
 };
 
@@ -30,7 +35,23 @@ type CollectClientOptions = {
   apiKey: string;
 };
 
+type SetupAgent = 'codex' | 'claude' | 'openclaw';
+
+type CommandRunResult = {
+  ok: boolean;
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+};
+
 const env = readCliEnv();
+const CLI_VERSION = '0.1.0';
+const SKILL_ID = 'prodinfos';
+const SKILL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const SKILL_SYNC_TIMEOUT_MS = 4000;
+const KEYCHAIN_SERVICE = 'com.prodinfos.cli.token';
+const KEYCHAIN_ACCOUNT = process.env.USER ?? process.env.USERNAME ?? 'default';
 const SELF_TRACKING_ENDPOINT = env.PRODINFOS_SELF_TRACKING_ENDPOINT?.replace(/\/$/, '');
 const SELF_TRACKING_ENABLED = Boolean(
   env.PRODINFOS_SELF_TRACKING_ENABLED &&
@@ -58,10 +79,23 @@ const configPath = resolveConfigPath();
 const readConfig = async (): Promise<CliConfig> => {
   try {
     const raw = await readFile(configPath, 'utf8');
-    return JSON.parse(raw) as CliConfig;
+    const parsed = JSON.parse(raw) as Partial<CliConfig>;
+    return {
+      apiUrl: typeof parsed.apiUrl === 'string' ? parsed.apiUrl : env.PRODINFOS_API_URL,
+      token: typeof parsed.token === 'string' ? parsed.token : undefined,
+      tokenStorage:
+        parsed.tokenStorage === 'system_keychain' || parsed.tokenStorage === 'config_file'
+          ? parsed.tokenStorage
+          : undefined,
+      skillAutoUpdate: typeof parsed.skillAutoUpdate === 'boolean' ? parsed.skillAutoUpdate : false,
+      lastSkillSyncAt: typeof parsed.lastSkillSyncAt === 'string' ? parsed.lastSkillSyncAt : undefined,
+      setupCompletedAt: typeof parsed.setupCompletedAt === 'string' ? parsed.setupCompletedAt : undefined,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+    };
   } catch {
     return {
       apiUrl: env.PRODINFOS_API_URL,
+      skillAutoUpdate: false,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -70,6 +104,252 @@ const readConfig = async (): Promise<CliConfig> => {
 const writeConfigValue = async (value: CliConfig): Promise<void> => {
   await mkdir(dirname(configPath), { recursive: true });
   await writeFile(configPath, JSON.stringify(value, null, 2), 'utf8');
+  await chmod(configPath, 0o600).catch(() => {
+    // Best effort: some platforms may not support chmod for this path.
+  });
+};
+
+const runCommand = (
+  command: string,
+  args: string[],
+  options?: { input?: string; timeoutMs?: number },
+): CommandRunResult => {
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    input: options?.input,
+    timeout: options?.timeoutMs,
+  });
+
+  const timedOut = (result.error as { code?: string } | undefined)?.code === 'ETIMEDOUT';
+
+  return {
+    ok: !result.error && result.status === 0,
+    code: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    timedOut,
+  };
+};
+
+const isCommandAvailable = (command: string): boolean => {
+  const result = spawnSync(command, ['--help'], {
+    stdio: 'ignore',
+    timeout: 2000,
+  });
+  return !result.error;
+};
+
+const readTokenFromSystemStore = (): string | undefined => {
+  if (process.platform === 'darwin') {
+    const result = runCommand('security', [
+      'find-generic-password',
+      '-a',
+      KEYCHAIN_ACCOUNT,
+      '-s',
+      KEYCHAIN_SERVICE,
+      '-w',
+    ]);
+    if (!result.ok) {
+      return undefined;
+    }
+
+    const token = result.stdout.trim();
+    return token || undefined;
+  }
+
+  if (process.platform === 'linux') {
+    const result = runCommand('secret-tool', [
+      'lookup',
+      'service',
+      KEYCHAIN_SERVICE,
+      'account',
+      KEYCHAIN_ACCOUNT,
+    ]);
+    if (!result.ok) {
+      return undefined;
+    }
+
+    const token = result.stdout.trim();
+    return token || undefined;
+  }
+
+  return undefined;
+};
+
+const writeTokenToSystemStore = (token: string): boolean => {
+  if (process.platform === 'darwin') {
+    const result = runCommand(
+      'security',
+      ['add-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', KEYCHAIN_SERVICE, '-w', token, '-U'],
+      { timeoutMs: 5000 },
+    );
+    return result.ok;
+  }
+
+  if (process.platform === 'linux') {
+    const result = runCommand(
+      'secret-tool',
+      ['store', '--label', 'Prodinfos CLI token', 'service', KEYCHAIN_SERVICE, 'account', KEYCHAIN_ACCOUNT],
+      { input: token, timeoutMs: 5000 },
+    );
+    return result.ok;
+  }
+
+  return false;
+};
+
+const resolveAuthToken = (config: CliConfig, overrideToken?: string): string | undefined => {
+  if (overrideToken) {
+    return overrideToken;
+  }
+
+  if (config.tokenStorage === 'system_keychain') {
+    const tokenFromStore = readTokenFromSystemStore();
+    if (tokenFromStore) {
+      return tokenFromStore;
+    }
+  }
+
+  return config.token;
+};
+
+const persistAuthToken = async (
+  baseConfig: CliConfig,
+  apiUrl: string,
+  token: string,
+): Promise<{ config: CliConfig; storage: 'config_file' | 'system_keychain' }> => {
+  const useSystemStore = writeTokenToSystemStore(token);
+  const storage: 'config_file' | 'system_keychain' = useSystemStore ? 'system_keychain' : 'config_file';
+  const nextConfig: CliConfig = {
+    ...baseConfig,
+    apiUrl,
+    token: storage === 'config_file' ? token : undefined,
+    tokenStorage: storage,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeConfigValue(nextConfig);
+  return { config: nextConfig, storage };
+};
+
+const parseSetupAgents = (value: string): SetupAgent[] => {
+  const normalized = value
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+
+  const wantsAll = normalized.length === 0 || normalized.includes('all');
+  const selected = wantsAll ? ['codex', 'claude', 'openclaw'] : normalized;
+  const allowed = new Set<SetupAgent>(['codex', 'claude', 'openclaw']);
+  const result: SetupAgent[] = [];
+
+  for (const agent of selected) {
+    if (!allowed.has(agent as SetupAgent)) {
+      throw Object.assign(
+        new Error('Invalid --agents value. Use all|codex|claude|openclaw (comma-separated).'),
+        { exitCode: 2 },
+      );
+    }
+
+    const typedAgent = agent as SetupAgent;
+    if (!result.includes(typedAgent)) {
+      result.push(typedAgent);
+    }
+  }
+
+  return result;
+};
+
+const installAgentSkills = (
+  agents: SetupAgent[],
+): Array<{ target: 'codex_claude' | 'openclaw'; ok: boolean; skipped: boolean; detail: string }> => {
+  const results: Array<{
+    target: 'codex_claude' | 'openclaw';
+    ok: boolean;
+    skipped: boolean;
+    detail: string;
+  }> = [];
+
+  if (agents.includes('codex') || agents.includes('claude')) {
+    if (!isCommandAvailable('npx')) {
+      results.push({
+        target: 'codex_claude',
+        ok: false,
+        skipped: true,
+        detail: '`npx` not available on this machine.',
+      });
+    } else {
+      const install = runCommand('npx', ['-y', 'skills', 'add', SKILL_ID], { timeoutMs: 120_000 });
+      results.push({
+        target: 'codex_claude',
+        ok: install.ok,
+        skipped: false,
+        detail: install.ok
+          ? 'Skill installed/updated with `npx skills add prodinfos`.'
+          : install.timedOut
+            ? 'Skill install timed out.'
+            : install.stderr.trim() || `Exit code ${install.code ?? 'unknown'}.`,
+      });
+    }
+  }
+
+  if (agents.includes('openclaw')) {
+    if (!isCommandAvailable('openclaw')) {
+      results.push({
+        target: 'openclaw',
+        ok: false,
+        skipped: true,
+        detail: '`openclaw` not found. Install OpenClaw first.',
+      });
+    } else {
+      const install = runCommand('openclaw', ['skill', 'add', SKILL_ID], { timeoutMs: 120_000 });
+      results.push({
+        target: 'openclaw',
+        ok: install.ok,
+        skipped: false,
+        detail: install.ok
+          ? 'Skill installed/updated with `openclaw skill add prodinfos`.'
+          : install.timedOut
+            ? 'Skill install timed out.'
+            : install.stderr.trim() || `Exit code ${install.code ?? 'unknown'}.`,
+      });
+    }
+  }
+
+  return results;
+};
+
+const maybeAutoRefreshSkills = async (commandPath: string): Promise<void> => {
+  if (commandPath === 'setup') {
+    return;
+  }
+
+  const config = await readConfig();
+  if (!config.skillAutoUpdate) {
+    return;
+  }
+
+  const lastSyncAtMs = config.lastSkillSyncAt ? Date.parse(config.lastSkillSyncAt) : 0;
+  if (Number.isFinite(lastSyncAtMs) && Date.now() - lastSyncAtMs < SKILL_SYNC_INTERVAL_MS) {
+    return;
+  }
+
+  if (isCommandAvailable('npx')) {
+    runCommand('npx', ['-y', 'skills', 'add', SKILL_ID], {
+      timeoutMs: SKILL_SYNC_TIMEOUT_MS,
+    });
+  }
+
+  if (isCommandAvailable('openclaw')) {
+    runCommand('openclaw', ['skill', 'add', SKILL_ID], {
+      timeoutMs: SKILL_SYNC_TIMEOUT_MS,
+    });
+  }
+
+  await writeConfigValue({
+    ...config,
+    lastSkillSyncAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
 };
 
 const formatOutput = (format: OutputFormat, payload: unknown): string => {
@@ -151,7 +431,7 @@ const requestApi = async (
 ): Promise<unknown> => {
   const config = await readConfig();
   const apiUrl = (options.apiUrl ?? config.apiUrl).replace(/\/$/, '');
-  const token = options.token ?? config.token;
+  const token = resolveAuthToken(config, options.token);
 
   const response = await fetch(`${apiUrl}${path}`, {
     method,
@@ -185,7 +465,7 @@ const requestCsvExport = async (
 ): Promise<{ csv: string; filename: string }> => {
   const config = await readConfig();
   const apiUrl = (options.apiUrl ?? config.apiUrl).replace(/\/$/, '');
-  const token = options.token ?? config.token;
+  const token = resolveAuthToken(config, options.token);
 
   const response = await fetch(`${apiUrl}${path}`, {
     method: 'GET',
@@ -243,6 +523,37 @@ const requestCollect = async (
   }
 
   return data;
+};
+
+const exchangeClerkJwtForReadonlyToken = async (
+  apiUrl: string,
+  clerkJwt: string,
+): Promise<{ token: string; tenantId?: unknown; projectIds?: unknown }> => {
+  const response = await fetch(`${apiUrl}/v1/auth/exchange-clerk`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${clerkJwt}`,
+    },
+    body: JSON.stringify({}),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || typeof payload.token !== 'string') {
+    const err = new Error('Failed to exchange Clerk token') as Error & {
+      exitCode?: number;
+      payload?: unknown;
+    };
+    err.exitCode = mapStatusToExitCode(response.status);
+    err.payload = payload;
+    throw err;
+  }
+
+  return {
+    token: payload.token,
+    tenantId: payload.tenantId,
+    projectIds: payload.projectIds,
+  };
 };
 
 const withErrorHandling = async (fn: () => Promise<void>): Promise<void> => {
@@ -310,10 +621,10 @@ const emitSelfTrackingEvent = async (
               ...properties,
               platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
               nodeVersion: process.version,
-              cliVersion: '0.1.0',
+              cliVersion: CLI_VERSION,
             },
             platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
-            appVersion: '0.1.0',
+            appVersion: CLI_VERSION,
             type: 'track',
           },
         ],
@@ -347,10 +658,13 @@ program
   .option('--include-debug', 'Include development/debug events in query/export commands', false)
   .option('--quiet', 'Reduce text output noise', false);
 
-program.hook('preAction', (_thisCommand, actionCommand) => {
+program.hook('preAction', async (_thisCommand, actionCommand) => {
   activeCommandPath = resolveCommandPath(actionCommand);
   activeCommandStartMs = Date.now();
-  void emitSelfTrackingEvent('cli:command_started', {
+  await maybeAutoRefreshSkills(activeCommandPath).catch(() => {
+    // Auto-refresh is best effort.
+  });
+  await emitSelfTrackingEvent('cli:command_started', {
     command: activeCommandPath,
   });
 });
@@ -367,7 +681,7 @@ program
   .description('Store CLI token or exchange Clerk JWT for a readonly token')
   .option('--token <token>', 'Direct readonly token')
   .option('--clerk-jwt <jwt>', 'Clerk JWT to exchange')
-  .action(async (options) => {
+  .action(async (options: { token?: string; clerkJwt?: string }) => {
     await withErrorHandling(async () => {
       const root = program.opts<{
         apiUrl?: string;
@@ -381,56 +695,143 @@ program
         throw Object.assign(new Error('Provide --token or --clerk-jwt'), { exitCode: 2 });
       }
 
+      const now = new Date().toISOString();
+
       if (options.token) {
-        await writeConfigValue({
-          apiUrl,
-          token: options.token,
-          updatedAt: new Date().toISOString(),
-        });
+        const persisted = await persistAuthToken(config, apiUrl, options.token);
 
         print(root.format, {
           ok: true,
           mode: 'direct_token',
+          tokenStorage: persisted.storage,
           configPath,
+          updatedAt: now,
         });
         return;
       }
 
-      const response = await fetch(`${apiUrl}/v1/auth/exchange-clerk`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${options.clerkJwt}`,
-        },
-        body: JSON.stringify({}),
-      });
-
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok || typeof payload.token !== 'string') {
-        const err = new Error('Failed to exchange Clerk token') as Error & {
-          exitCode?: number;
-          payload?: unknown;
-        };
-        err.exitCode = mapStatusToExitCode(response.status);
-        err.payload = payload;
-        throw err;
-      }
-
-      await writeConfigValue({
-        apiUrl,
-        token: payload.token,
-        updatedAt: new Date().toISOString(),
-      });
+      const exchanged = await exchangeClerkJwtForReadonlyToken(apiUrl, String(options.clerkJwt));
+      const persisted = await persistAuthToken(config, apiUrl, exchanged.token);
 
       print(root.format, {
         ok: true,
         mode: 'clerk_exchange',
+        tokenStorage: persisted.storage,
         configPath,
-        tenantId: payload.tenantId,
-        projectIds: payload.projectIds,
+        tenantId: exchanged.tenantId,
+        projectIds: exchanged.projectIds,
+        updatedAt: now,
       });
     });
   });
+
+program
+  .command('setup')
+  .description('One-time setup: install skills, login, and enable optional auto skill refresh')
+  .option('--token <token>', 'Readonly token for login')
+  .option('--clerk-jwt <jwt>', 'Clerk JWT to exchange for a readonly token')
+  .option('--skip-login', 'Skip login step', false)
+  .option('--skip-skills', 'Skip skill installation step', false)
+  .option('--agents <targets>', 'all|codex|claude|openclaw (comma-separated)', 'all')
+  .option('--no-auto-skill-update', 'Disable daily skill refresh on CLI execution')
+  .action(
+    async (options: {
+      token?: string;
+      clerkJwt?: string;
+      skipLogin?: boolean;
+      skipSkills?: boolean;
+      agents?: string;
+      autoSkillUpdate?: boolean;
+    }) => {
+      await withErrorHandling(async () => {
+        const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+        const initialConfig = await readConfig();
+        const apiUrl = (root.apiUrl ?? initialConfig.apiUrl).replace(/\/$/, '');
+        const agents = parseSetupAgents(String(options.agents ?? 'all'));
+
+        const skillResults = options.skipSkills ? [] : installAgentSkills(agents);
+        let activeConfig = initialConfig;
+        let loginResult: Record<string, unknown> = {
+          ok: true,
+          skipped: true,
+        };
+
+        if (!options.skipLogin) {
+          if (options.token) {
+            const persisted = await persistAuthToken(activeConfig, apiUrl, options.token);
+            activeConfig = persisted.config;
+            loginResult = {
+              ok: true,
+              mode: 'direct_token',
+              tokenStorage: persisted.storage,
+            };
+          } else if (options.clerkJwt) {
+            const exchanged = await exchangeClerkJwtForReadonlyToken(apiUrl, options.clerkJwt);
+            const persisted = await persistAuthToken(activeConfig, apiUrl, exchanged.token);
+            activeConfig = persisted.config;
+            loginResult = {
+              ok: true,
+              mode: 'clerk_exchange',
+              tokenStorage: persisted.storage,
+              tenantId: exchanged.tenantId,
+              projectIds: exchanged.projectIds,
+            };
+          } else if (resolveAuthToken(activeConfig, root.token)) {
+            loginResult = {
+              ok: true,
+              mode: 'existing_token',
+              tokenStorage: activeConfig.tokenStorage ?? 'config_file',
+            };
+          } else {
+            throw Object.assign(
+              new Error(
+                'Provide --token or --clerk-jwt for setup login, or pass --skip-login if you want skills only.',
+              ),
+              { exitCode: 2 },
+            );
+          }
+        }
+
+        const now = new Date().toISOString();
+        const autoSkillUpdateEnabled = options.autoSkillUpdate !== false;
+        const finalConfig: CliConfig = {
+          ...activeConfig,
+          apiUrl,
+          skillAutoUpdate: autoSkillUpdateEnabled,
+          setupCompletedAt: activeConfig.setupCompletedAt ?? now,
+          lastSkillSyncAt: options.skipSkills ? activeConfig.lastSkillSyncAt : now,
+          updatedAt: now,
+        };
+        await writeConfigValue(finalConfig);
+
+        if (root.format === 'text') {
+          const lines = [
+            'Setup complete.',
+            `- Login: ${String(loginResult.mode ?? 'skipped')}`,
+            `- Auto skill update: ${finalConfig.skillAutoUpdate ? 'enabled' : 'disabled'}`,
+            `- Config: ${configPath}`,
+          ];
+
+          for (const entry of skillResults) {
+            lines.push(`- Skills (${entry.target}): ${entry.ok ? 'ok' : entry.skipped ? 'skipped' : 'failed'}`);
+          }
+
+          print('text', lines.join('\n'));
+          return;
+        }
+
+        print(root.format, {
+          ok: true,
+          apiUrl,
+          configPath,
+          login: loginResult,
+          skillSetup: skillResults,
+          autoSkillUpdate: finalConfig.skillAutoUpdate,
+          setupCompletedAt: finalConfig.setupCompletedAt,
+        });
+      });
+    },
+  );
 
 const projects = program.command('projects').description('Project operations');
 
@@ -472,23 +873,18 @@ projects
       const token = (payload as { token?: unknown }).token;
       if (typeof token === 'string') {
         const current = await readConfig();
-        await writeConfigValue({
-          ...current,
-          apiUrl: (root.apiUrl ?? current.apiUrl).replace(/\/$/, ''),
-          token,
-          updatedAt: new Date().toISOString(),
-        });
+        await persistAuthToken(current, (root.apiUrl ?? current.apiUrl).replace(/\/$/, ''), token);
       }
 
       print(root.format, payload);
     });
   });
 
-const keys = program.command('keys').description('Project write key management');
+const keys = program.command('keys').description('Project public API key helpers');
 
 keys
   .command('list')
-  .description('List write keys for a project')
+  .description('Show the project public API key metadata')
   .requiredOption('--project <id>', 'Project ID')
   .action(async (options) => {
     await withErrorHandling(async () => {
@@ -497,50 +893,6 @@ keys
         'GET',
         `/v1/projects/${encodeURIComponent(options.project)}/api-keys`,
         undefined,
-        {
-          apiUrl: root.apiUrl,
-          token: root.token,
-        },
-      );
-      print(root.format, payload);
-    });
-  });
-
-keys
-  .command('create')
-  .description('Create a new write key for a project')
-  .requiredOption('--project <id>', 'Project ID')
-  .option('--name <name>', 'Key display name', 'SDK Write Key')
-  .action(async (options) => {
-    await withErrorHandling(async () => {
-      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
-      const payload = await requestApi(
-        'POST',
-        `/v1/projects/${encodeURIComponent(options.project)}/api-keys`,
-        {
-          name: options.name,
-        },
-        {
-          apiUrl: root.apiUrl,
-          token: root.token,
-        },
-      );
-      print(root.format, payload);
-    });
-  });
-
-keys
-  .command('revoke')
-  .description('Revoke an existing write key')
-  .requiredOption('--project <id>', 'Project ID')
-  .requiredOption('--key <id>', 'Key ID')
-  .action(async (options) => {
-    await withErrorHandling(async () => {
-      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
-      const payload = await requestApi(
-        'POST',
-        `/v1/projects/${encodeURIComponent(options.project)}/api-keys/${encodeURIComponent(options.key)}/revoke`,
-        {},
         {
           apiUrl: root.apiUrl,
           token: root.token,
@@ -919,7 +1271,7 @@ feedback
               meta,
             },
             platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
-            appVersion: '0.1.0',
+            appVersion: CLI_VERSION,
             type: 'feedback',
           },
         ],
