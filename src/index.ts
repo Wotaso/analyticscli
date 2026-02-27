@@ -25,6 +25,11 @@ type ClientOptions = {
   token?: string;
 };
 
+type CollectClientOptions = {
+  endpoint: string;
+  apiKey: string;
+};
+
 const env = readCliEnv();
 const SELF_TRACKING_ENDPOINT = env.PRODINFOS_SELF_TRACKING_ENDPOINT?.replace(/\/$/, '');
 const SELF_TRACKING_ENABLED = Boolean(
@@ -122,6 +127,22 @@ const mapStatusToExitCode = (status: number): number => {
   return 4;
 };
 
+const parseJsonObjectOption = (value: string | undefined, optionName: string): Record<string, unknown> => {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error();
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw Object.assign(new Error(`${optionName} must be a valid JSON object`), { exitCode: 2 });
+  }
+};
+
 const requestApi = async (
   method: 'GET' | 'POST',
   path: string,
@@ -143,6 +164,72 @@ const requestApi = async (
 
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 
+  if (!response.ok) {
+    const message =
+      typeof data?.error === 'object' && data.error && 'message' in data.error
+        ? String((data.error as { message: unknown }).message)
+        : `Request failed with status ${response.status}`;
+
+    const error = new Error(message) as Error & { exitCode?: number; payload?: unknown };
+    error.exitCode = mapStatusToExitCode(response.status);
+    error.payload = data;
+    throw error;
+  }
+
+  return data;
+};
+
+const requestCsvExport = async (
+  path: string,
+  options: ClientOptions,
+): Promise<{ csv: string; filename: string }> => {
+  const config = await readConfig();
+  const apiUrl = (options.apiUrl ?? config.apiUrl).replace(/\/$/, '');
+  const token = options.token ?? config.token;
+
+  const response = await fetch(`${apiUrl}${path}`, {
+    method: 'GET',
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const message =
+      typeof data?.error === 'object' && data.error && 'message' in data.error
+        ? String((data.error as { message: unknown }).message)
+        : `Request failed with status ${response.status}`;
+
+    const error = new Error(message) as Error & { exitCode?: number; payload?: unknown };
+    error.exitCode = mapStatusToExitCode(response.status);
+    error.payload = data;
+    throw error;
+  }
+
+  const csv = await response.text();
+  const contentDisposition = response.headers.get('content-disposition') ?? '';
+  const filenameMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = filenameMatch?.[1] ?? 'prodinfos-events-export.csv';
+  return { csv, filename };
+};
+
+const requestCollect = async (
+  path: string,
+  body: unknown,
+  options: CollectClientOptions,
+): Promise<unknown> => {
+  const endpoint = options.endpoint.replace(/\/$/, '');
+  const response = await fetch(`${endpoint}${path}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': options.apiKey,
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     const message =
       typeof data?.error === 'object' && data.error && 'message' in data.error
@@ -761,6 +848,105 @@ program
 const feedback = program.command('feedback').description('Feedback data helpers');
 
 feedback
+  .command('submit')
+  .description('Submit product feedback for Prodinfos via ingest')
+  .requiredOption('--message <text>', 'Feedback message')
+  .option('--rating <n>', 'Optional rating 1-5')
+  .option('--category <type>', 'bug|feature|ux|performance|other', 'other')
+  .option('--context <text>', 'Optional context, e.g. what failed')
+  .option('--meta <json>', 'Optional JSON object with additional fields')
+  .option('--endpoint <url>', 'Collector endpoint (defaults to PRODINFOS_SELF_TRACKING_ENDPOINT)')
+  .option('--project <id>', 'Project ID for feedback events (defaults to PRODINFOS_SELF_TRACKING_PROJECT_ID)')
+  .option('--api-key <key>', 'Write key for feedback events (defaults to PRODINFOS_SELF_TRACKING_API_KEY)')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ format: OutputFormat }>();
+      const endpoint = String(options.endpoint ?? env.PRODINFOS_SELF_TRACKING_ENDPOINT ?? '').replace(
+        /\/$/,
+        '',
+      );
+      const projectId = String(options.project ?? env.PRODINFOS_SELF_TRACKING_PROJECT_ID ?? '');
+      const apiKey = String(options.apiKey ?? env.PRODINFOS_SELF_TRACKING_API_KEY ?? '');
+
+      if (!endpoint || !projectId || !apiKey) {
+        throw Object.assign(
+          new Error(
+            'Missing feedback target config. Provide --endpoint/--project/--api-key or set PRODINFOS_SELF_TRACKING_ENDPOINT, PRODINFOS_SELF_TRACKING_PROJECT_ID, PRODINFOS_SELF_TRACKING_API_KEY.',
+          ),
+          { exitCode: 2 },
+        );
+      }
+
+      const category = String(options.category ?? 'other').toLowerCase();
+      if (!['bug', 'feature', 'ux', 'performance', 'other'].includes(category)) {
+        throw Object.assign(
+          new Error('Invalid --category. Use bug|feature|ux|performance|other'),
+          { exitCode: 2 },
+        );
+      }
+
+      let rating: number | undefined;
+      if (options.rating !== undefined) {
+        const parsedRating = Number(options.rating);
+        if (!Number.isInteger(parsedRating) || parsedRating < 1 || parsedRating > 5) {
+          throw Object.assign(new Error('Invalid --rating. Use an integer 1-5.'), { exitCode: 2 });
+        }
+        rating = parsedRating;
+      }
+
+      const meta = parseJsonObjectOption(
+        options.meta as string | undefined,
+        '--meta',
+      );
+      const now = new Date().toISOString();
+
+      const payload = {
+        projectId,
+        sentAt: now,
+        events: [
+          {
+            eventName: 'feedback_submitted',
+            ts: now,
+            sessionId: CLI_SESSION_ID,
+            anonId: CLI_ANON_ID,
+            properties: {
+              message: String(options.message),
+              ...(rating !== undefined ? { rating } : {}),
+              category,
+              context: options.context ? String(options.context) : null,
+              source: 'cli',
+              command: activeCommandPath,
+              meta,
+            },
+            platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
+            appVersion: '0.1.0',
+            type: 'feedback',
+          },
+        ],
+      };
+
+      const response = await requestCollect('/v1/collect', payload, {
+        endpoint,
+        apiKey,
+      });
+
+      if (root.format === 'text') {
+        print('text', 'Feedback gesendet.');
+        return;
+      }
+
+      print(root.format, {
+        ok: true,
+        endpoint,
+        projectId,
+        category,
+        ...(rating !== undefined ? { rating } : {}),
+        response,
+      });
+    });
+  });
+
+feedback
   .command('export')
   .requiredOption('--project <id>', 'Project ID')
   .option('--last <duration>', 'Time range like 30d', '30d')
@@ -784,6 +970,74 @@ feedback
         token: root.token,
       });
       print(root.format, payload);
+    });
+  });
+
+const events = program.command('events').description('Event export helpers');
+
+events
+  .command('months')
+  .description('List months with available events for a given year')
+  .requiredOption('--project <id>', 'Project ID')
+  .requiredOption('--year <year>', 'UTC year, e.g. 2026')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const qs = new URLSearchParams({
+        projectId: options.project,
+        year: String(Number(options.year)),
+        includeDebug: String(includeDebugFlag()),
+      });
+
+      const payload = await requestApi('GET', `/v1/export/events/months?${qs.toString()}`, undefined, {
+        apiUrl: root.apiUrl,
+        token: root.token,
+      });
+      print(root.format, payload);
+    });
+  });
+
+events
+  .command('export')
+  .description('Download monthly events export as CSV')
+  .requiredOption('--project <id>', 'Project ID')
+  .requiredOption('--year <year>', 'UTC year, e.g. 2026')
+  .requiredOption('--month <month>', 'UTC month number 1-12')
+  .option('--out <path>', 'Output file path')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const year = Number(options.year);
+      const month = Number(options.month);
+      const qs = new URLSearchParams({
+        projectId: options.project,
+        year: String(year),
+        month: String(month),
+        format: 'csv',
+        includeDebug: String(includeDebugFlag()),
+      });
+
+      const { csv, filename } = await requestCsvExport(`/v1/export/events/download?${qs.toString()}`, {
+        apiUrl: root.apiUrl,
+        token: root.token,
+      });
+
+      const outPath = options.out ? String(options.out) : `./${filename}`;
+      await mkdir(dirname(outPath), { recursive: true });
+      await writeFile(outPath, csv, 'utf8');
+
+      if (root.format === 'text') {
+        print('text', `Export gespeichert: ${outPath}`);
+        return;
+      }
+
+      print(root.format, {
+        ok: true,
+        file: outPath,
+        year,
+        month,
+        format: 'csv',
+      });
     });
   });
 
