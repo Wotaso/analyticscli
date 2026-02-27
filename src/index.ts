@@ -4,6 +4,13 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Command } from 'commander';
 import { readCliEnv } from '@prodinfos/config';
+import {
+  renderHorizontalBars,
+  renderTable,
+  renderTimeseriesSvg,
+  writeSvgToFile,
+  type TimeseriesPoint,
+} from './render.js';
 
 type CliConfig = {
   apiUrl: string;
@@ -19,6 +26,19 @@ type ClientOptions = {
 };
 
 const env = readCliEnv();
+const SELF_TRACKING_ENDPOINT = env.PRODINFOS_SELF_TRACKING_ENDPOINT?.replace(/\/$/, '');
+const SELF_TRACKING_ENABLED = Boolean(
+  env.PRODINFOS_SELF_TRACKING_ENABLED &&
+    SELF_TRACKING_ENDPOINT &&
+    env.PRODINFOS_SELF_TRACKING_PROJECT_ID &&
+    env.PRODINFOS_SELF_TRACKING_API_KEY,
+);
+const CLI_RUN_ID = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+const CLI_ANON_ID = `cli-${CLI_RUN_ID}`;
+const CLI_SESSION_ID = `cli-session-${CLI_RUN_ID}`;
+
+let activeCommandPath = 'unknown';
+let activeCommandStartMs = Date.now();
 
 const resolveConfigPath = (): string => {
   if (env.PRODINFOS_CONFIG_DIR) {
@@ -57,6 +77,33 @@ const formatOutput = (format: OutputFormat, payload: unknown): string => {
   }
 
   return JSON.stringify(payload, null, 2);
+};
+
+const asTimeseriesPoints = (payload: unknown): TimeseriesPoint[] => {
+  if (!payload || typeof payload !== 'object' || !('points' in payload)) {
+    return [];
+  }
+
+  const points = (payload as { points?: unknown }).points;
+  if (!Array.isArray(points)) {
+    return [];
+  }
+
+  return points
+    .map((point) => {
+      if (!point || typeof point !== 'object') {
+        return null;
+      }
+
+      const ts = (point as { ts?: unknown }).ts;
+      const value = (point as { value?: unknown }).value;
+      if (typeof ts !== 'string' || typeof value !== 'number') {
+        return null;
+      }
+
+      return { ts, value };
+    })
+    .filter((point): point is TimeseriesPoint => point !== null);
 };
 
 const print = (format: OutputFormat, payload: unknown): void => {
@@ -116,6 +163,11 @@ const withErrorHandling = async (fn: () => Promise<void>): Promise<void> => {
     await fn();
   } catch (error) {
     const typed = error as Error & { exitCode?: number; payload?: unknown };
+    await emitSelfTrackingEvent('cli:command_failed', {
+      command: activeCommandPath,
+      durationMs: Date.now() - activeCommandStartMs,
+      exitCode: typed.exitCode ?? 4,
+    });
     const payload = typed.payload ?? {
       error: {
         message: typed.message,
@@ -127,12 +179,75 @@ const withErrorHandling = async (fn: () => Promise<void>): Promise<void> => {
   }
 };
 
+const resolveCommandPath = (command: Command): string => {
+  const names: string[] = [];
+  let cursor: Command | null = command;
+
+  while (cursor) {
+    const name = cursor.name();
+    if (name && name !== 'prodinfos') {
+      names.unshift(name);
+    }
+    cursor = cursor.parent ?? null;
+  }
+
+  return names.join(' ') || 'unknown';
+};
+
+const emitSelfTrackingEvent = async (
+  eventName: string,
+  properties: Record<string, unknown>,
+): Promise<void> => {
+  if (!SELF_TRACKING_ENABLED) {
+    return;
+  }
+
+  try {
+    await fetch(`${SELF_TRACKING_ENDPOINT}/v1/collect`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': String(env.PRODINFOS_SELF_TRACKING_API_KEY),
+      },
+      body: JSON.stringify({
+        projectId: String(env.PRODINFOS_SELF_TRACKING_PROJECT_ID),
+        sentAt: new Date().toISOString(),
+        events: [
+          {
+            eventId: `${eventName}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+            eventName,
+            ts: new Date().toISOString(),
+            sessionId: CLI_SESSION_ID,
+            anonId: CLI_ANON_ID,
+            properties: {
+              ...properties,
+              platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
+              nodeVersion: process.version,
+              cliVersion: '0.1.0',
+            },
+            platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
+            appVersion: '0.1.0',
+            type: 'track',
+          },
+        ],
+      }),
+    });
+  } catch {
+    // Self-tracking must never break CLI behavior.
+  }
+};
+
 const resolveProjectOption = (project: string | undefined): { projectId?: string } => {
   if (!project) {
     return {};
   }
 
   return { projectId: project };
+};
+
+const includeDebugFlag = (): boolean => {
+  const root = program.opts<{ includeDebug?: boolean }>();
+  return Boolean(root.includeDebug);
 };
 
 const program = new Command();
@@ -142,7 +257,23 @@ program
   .option('--api-url <url>', 'API base URL')
   .option('--token <token>', 'Override auth token for this call')
   .option('--format <format>', 'Output format json|text', 'json')
+  .option('--include-debug', 'Include development/debug events in query/export commands', false)
   .option('--quiet', 'Reduce text output noise', false);
+
+program.hook('preAction', (_thisCommand, actionCommand) => {
+  activeCommandPath = resolveCommandPath(actionCommand);
+  activeCommandStartMs = Date.now();
+  void emitSelfTrackingEvent('cli:command_started', {
+    command: activeCommandPath,
+  });
+});
+
+program.hook('postAction', async (_thisCommand, actionCommand) => {
+  await emitSelfTrackingEvent('cli:command_succeeded', {
+    command: resolveCommandPath(actionCommand),
+    durationMs: Date.now() - activeCommandStartMs,
+  });
+});
 
 program
   .command('login')
@@ -230,6 +361,108 @@ projects
     });
   });
 
+projects
+  .command('create')
+  .description('Create a new project in your tenant')
+  .requiredOption('--name <name>', 'Project name')
+  .requiredOption('--slug <slug>', 'Project slug')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const payload = await requestApi(
+        'POST',
+        '/v1/projects',
+        {
+          name: options.name,
+          slug: options.slug,
+        },
+        {
+          apiUrl: root.apiUrl,
+          token: root.token,
+        },
+      );
+
+      const token = (payload as { token?: unknown }).token;
+      if (typeof token === 'string') {
+        const current = await readConfig();
+        await writeConfigValue({
+          ...current,
+          apiUrl: (root.apiUrl ?? current.apiUrl).replace(/\/$/, ''),
+          token,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      print(root.format, payload);
+    });
+  });
+
+const keys = program.command('keys').description('Project write key management');
+
+keys
+  .command('list')
+  .description('List write keys for a project')
+  .requiredOption('--project <id>', 'Project ID')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const payload = await requestApi(
+        'GET',
+        `/v1/projects/${encodeURIComponent(options.project)}/api-keys`,
+        undefined,
+        {
+          apiUrl: root.apiUrl,
+          token: root.token,
+        },
+      );
+      print(root.format, payload);
+    });
+  });
+
+keys
+  .command('create')
+  .description('Create a new write key for a project')
+  .requiredOption('--project <id>', 'Project ID')
+  .option('--name <name>', 'Key display name', 'SDK Write Key')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const payload = await requestApi(
+        'POST',
+        `/v1/projects/${encodeURIComponent(options.project)}/api-keys`,
+        {
+          name: options.name,
+        },
+        {
+          apiUrl: root.apiUrl,
+          token: root.token,
+        },
+      );
+      print(root.format, payload);
+    });
+  });
+
+keys
+  .command('revoke')
+  .description('Revoke an existing write key')
+  .requiredOption('--project <id>', 'Project ID')
+  .requiredOption('--key <id>', 'Key ID')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const payload = await requestApi(
+        'POST',
+        `/v1/projects/${encodeURIComponent(options.project)}/api-keys/${encodeURIComponent(options.key)}/revoke`,
+        {},
+        {
+          apiUrl: root.apiUrl,
+          token: root.token,
+        },
+      );
+      print(root.format, payload);
+    });
+  });
+
 const schema = program.command('schema').description('Data schema helpers');
 
 schema
@@ -244,6 +477,7 @@ schema
       const qs = new URLSearchParams({
         projectId: options.project,
         limit: String(limit),
+        includeDebug: String(includeDebugFlag()),
       });
 
       const payload = await requestApi('GET', `/v1/schema/events?${qs.toString()}`, undefined, {
@@ -276,6 +510,7 @@ program
           steps,
           within: options.within,
           last: options.last,
+          includeDebug: includeDebugFlag(),
         },
         {
           apiUrl: root.apiUrl,
@@ -305,12 +540,64 @@ program
           to: options.to,
           within: options.within,
           last: options.last,
+          includeDebug: includeDebugFlag(),
         },
         {
           apiUrl: root.apiUrl,
           token: root.token,
         },
       );
+      print(root.format, payload);
+    });
+  });
+
+program
+  .command('goal-completion')
+  .description(
+    'Convenience query for completion style questions, e.g. onboarding start -> onboarding complete',
+  )
+  .requiredOption('--project <id>', 'Project ID')
+  .requiredOption('--start <event>', 'Start event (e.g. onboarding:start)')
+  .requiredOption('--complete <event>', 'Completion event (e.g. onboarding:complete)')
+  .option('--within <scope>', 'session|user', 'session')
+  .option('--last <duration>', 'Time range like 30d', '30d')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const payload = (await requestApi(
+        'POST',
+        '/v1/query/conversion_after',
+        {
+          ...resolveProjectOption(options.project),
+          from: options.start,
+          to: options.complete,
+          within: options.within,
+          last: options.last,
+          includeDebug: includeDebugFlag(),
+        },
+        {
+          apiUrl: root.apiUrl,
+          token: root.token,
+        },
+      )) as {
+        from: string;
+        to: string;
+        totalFrom: number;
+        totalConverted: number;
+        conversionRate: number;
+        timeRange?: { since?: string; until?: string };
+      };
+
+      if (root.format === 'text') {
+        print(
+          'text',
+          `Completion ${payload.from} -> ${payload.to}: ${payload.totalConverted}/${payload.totalFrom} (${(
+            payload.conversionRate * 100
+          ).toFixed(2)}%)`,
+        );
+        return;
+      }
+
       print(root.format, payload);
     });
   });
@@ -334,6 +621,7 @@ program
           top: Number(options.top),
           within: options.within,
           last: options.last,
+          includeDebug: includeDebugFlag(),
         },
         {
           apiUrl: root.apiUrl,
@@ -351,10 +639,12 @@ program
   .option('--event <name>', 'Optional event filter')
   .option('--interval <value>', '1h|1d', '1h')
   .option('--last <duration>', 'Time range like 7d', '7d')
+  .option('--viz <mode>', 'none|table|chart|svg', 'none')
+  .option('--out <path>', 'Output file path for svg mode', './timeseries.svg')
   .action(async (options) => {
     await withErrorHandling(async () => {
       const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
-      const payload = await requestApi(
+      const payload = (await requestApi(
         'POST',
         '/v1/query/timeseries',
         {
@@ -363,13 +653,60 @@ program
           event: options.event,
           interval: options.interval,
           last: options.last,
+          includeDebug: includeDebugFlag(),
         },
         {
           apiUrl: root.apiUrl,
           token: root.token,
         },
-      );
-      print(root.format, payload);
+      )) as {
+        metric: string;
+        interval: string;
+        points: TimeseriesPoint[];
+      };
+
+      const vizMode = String(options.viz ?? 'none');
+      if (vizMode === 'none') {
+        print(root.format, payload);
+        return;
+      }
+
+      const points = asTimeseriesPoints(payload);
+      if (vizMode === 'table') {
+        const table = renderTable(
+          ['timestamp', 'value'],
+          points.map((point) => [point.ts, point.value]),
+        );
+        print('text', table);
+        return;
+      }
+
+      if (vizMode === 'chart') {
+        const chart = renderHorizontalBars(
+          points.map((point) => ({
+            label: point.ts,
+            value: point.value,
+          })),
+        );
+        print('text', chart);
+        return;
+      }
+
+      if (vizMode === 'svg') {
+        const svg = renderTimeseriesSvg({
+          title: `${payload.metric} (${payload.interval})`,
+          points,
+        });
+        await writeSvgToFile(String(options.out), svg);
+        print(root.format, {
+          ok: true,
+          file: String(options.out),
+          points: points.length,
+        });
+        return;
+      }
+
+      throw Object.assign(new Error('Invalid --viz mode. Use none|table|chart|svg'), { exitCode: 2 });
     });
   });
 
@@ -409,6 +746,7 @@ program
           by: options.by,
           top: Number(options.top),
           last: options.last,
+          includeDebug: includeDebugFlag(),
           query,
         },
         {
@@ -435,6 +773,7 @@ feedback
         projectId: options.project,
         last: options.last,
         limit: String(Number(options.limit)),
+        includeDebug: String(includeDebugFlag()),
       });
       if (options.cursor) {
         qs.set('cursor', options.cursor);

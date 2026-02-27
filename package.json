@@ -11,7 +11,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
-    "test": "echo 'no tests for @prodinfos/cli'"
+    "test": "tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
     "@prodinfos/config": "workspace:*",
