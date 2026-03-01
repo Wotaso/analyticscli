@@ -1884,6 +1884,112 @@ program
   });
 
 program
+  .command('survey')
+  .description('Aggregate survey responses (anonymized) by question and answer')
+  .requiredOption('--project <id>', 'Project ID')
+  .option('--event <name>', 'Survey response event name', 'onboarding:survey_response')
+  .option('--survey-key <key>', 'Optional survey key filter')
+  .option('--question-key <key>', 'Optional question key filter')
+  .option('--top-questions <n>', 'Top questions', '20')
+  .option('--top-answers <n>', 'Top answers per question', '10')
+  .option('--min-users <n>', 'Minimum unique users before values are shown', '3')
+  .option('--last <duration>', 'Time range like 30d', '30d')
+  .option('--app-version <version>', 'Filter by appVersion')
+  .option('--flow-id <id>', 'Filter by onboardingFlowId')
+  .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
+  .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
+  .option('--paywall-id <id>', 'Filter by paywallId')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const topQuestions = parseIntegerOption(options.topQuestions, '--top-questions', 1, 100);
+      const topAnswers = parseIntegerOption(options.topAnswers, '--top-answers', 1, 100);
+      const minUsers = parseIntegerOption(options.minUsers, '--min-users', 1, 500);
+
+      const payload = (await requestApi(
+        'POST',
+        '/v1/query/survey',
+        {
+          ...resolveProjectOption(options.project),
+          eventName: options.event,
+          surveyKey: options.surveyKey,
+          questionKey: options.questionKey,
+          topQuestions,
+          topAnswers,
+          minUsers,
+          last: options.last,
+          includeDebug: includeDebugFlag(),
+          ...resolveFlowSelectorOption(options),
+        },
+        {
+          apiUrl: root.apiUrl,
+          token: root.token,
+        },
+      )) as {
+        eventName: string;
+        surveyKey: string | null;
+        questionKey: string | null;
+        minUsers: number;
+        questions: Array<{
+          questionKey: string;
+          responses: number;
+          uniqueUsers: number;
+          answers: Array<{
+            responseKey: string;
+            responses: number;
+            uniqueUsers: number;
+            share: number;
+          }>;
+        }>;
+        totals: { responses: number; uniqueUsers: number };
+      };
+
+      if (root.format === 'text') {
+        const blocks: string[] = [];
+        blocks.push(
+          [
+            `Survey summary (${options.last})`,
+            `event: ${payload.eventName}`,
+            `survey: ${payload.surveyKey ?? 'all'}`,
+            `question: ${payload.questionKey ?? 'all'}`,
+            `totals: ${payload.totals.responses} responses / ${payload.totals.uniqueUsers} users`,
+            `anonymization threshold: min ${payload.minUsers} users`,
+          ].join('\n'),
+        );
+
+        for (const question of payload.questions) {
+          const table = renderTable(
+            ['response', 'responses', 'users', 'share'],
+            question.answers.map((answer) => [
+              answer.responseKey,
+              answer.responses,
+              answer.uniqueUsers,
+              `${(answer.share * 100).toFixed(2)}%`,
+            ]),
+          );
+
+          blocks.push(
+            [
+              `Question: ${question.questionKey}`,
+              `responses: ${question.responses} / users: ${question.uniqueUsers}`,
+              table,
+            ].join('\n'),
+          );
+        }
+
+        if (payload.questions.length === 0) {
+          blocks.push('No survey responses found for the selected window/filters.');
+        }
+
+        print('text', blocks.join('\n\n'));
+        return;
+      }
+
+      print(root.format, payload);
+    });
+  });
+
+program
   .command('breakdown')
   .requiredOption('--project <id>', 'Project ID')
   .requiredOption('--by <prop>', 'Property name')
