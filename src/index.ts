@@ -28,7 +28,10 @@ import {
 import { configPath, persistAuthToken, readConfig, resolveAuthToken } from './config-store.js';
 import {
   asTimeseriesPoints,
+  computeRateTrendFromTimeseriesPoints,
+  computeTrendFromTimeseriesPoints,
   formatOutput,
+  formatTrendSummary,
   isOnboardingScreenEvent,
   normalizeOptionString,
   parseIntegerOption,
@@ -36,6 +39,7 @@ import {
   parseRetentionDaysOption,
   pickBetterAlias,
   print,
+  resolveTrendInterval,
   resolveFlowSelectorOption,
   resolveProjectOption,
   toPercent,
@@ -479,6 +483,7 @@ getCommand
   .option('--within <scope>', 'session|user', 'user')
   .option('--last <duration>', 'Time range like 30d', '30d')
   .option('--events-limit <n>', 'Schema events scan limit', '500')
+  .option('--with-trends', 'Include first-vs-latest trend block for top funnel KPIs', false)
   .option('--app-version <version>', 'Filter by appVersion')
   .option('--flow-id <id>', 'Filter by onboardingFlowId')
   .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
@@ -488,6 +493,8 @@ getCommand
     await withErrorHandling(async () => {
       const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
       const flowSelection = resolveFlowSelectorOption(options).flow;
+      const includeTrends = Boolean(options.withTrends);
+      const trendInterval = resolveTrendInterval(String(options.last));
 
       const queryConversion = async (from: string, to: string) => {
         return (await requestApi(
@@ -511,6 +518,35 @@ getCommand
           totalConverted: number;
           conversionRate: number;
         };
+      };
+
+      const trendTimeseriesCache = new Map<string, Promise<TimeseriesPoint[]>>();
+      const queryUniqueUserSeries = (eventName: string) => {
+        const existing = trendTimeseriesCache.get(eventName);
+        if (existing) {
+          return existing;
+        }
+
+        const pending = requestApi(
+          'POST',
+          '/v1/query/timeseries',
+          {
+            ...resolveProjectOption(options.project),
+            metric: 'unique_users',
+            event: eventName,
+            interval: trendInterval,
+            last: options.last,
+            includeDebug: includeDebugFlag(),
+            ...(flowSelection ? { flow: flowSelection } : {}),
+          },
+          {
+            apiUrl: root.apiUrl,
+            token: root.token,
+          },
+        ).then((payload) => asTimeseriesPoints(payload));
+
+        trendTimeseriesCache.set(eventName, pending);
+        return pending;
       };
 
       const schemaQuery = new URLSearchParams({
@@ -637,6 +673,60 @@ getCommand
         anchorToPurchasePrimary.totalFrom ||
         anchorToPurchaseFallback.totalFrom ||
         paywallAnchorByStart.users;
+
+      let trends: {
+        starters: ReturnType<typeof computeTrendFromTimeseriesPoints>;
+        completionRate: ReturnType<typeof computeRateTrendFromTimeseriesPoints>;
+        dropOffRate: ReturnType<typeof computeRateTrendFromTimeseriesPoints>;
+        paywallReachedRate: ReturnType<typeof computeRateTrendFromTimeseriesPoints>;
+        purchaseRate: ReturnType<typeof computeRateTrendFromTimeseriesPoints>;
+      } | null = null;
+
+      if (includeTrends) {
+        const [
+          startersSeries,
+          completionSeries,
+          paywallShownSeries,
+          paywallEntrySeries,
+          purchasePrimarySeries,
+          purchaseFallbackSeries,
+        ] = await Promise.all([
+          queryUniqueUserSeries(ONBOARDING_START_EVENT),
+          queryUniqueUserSeries('onboarding:complete'),
+          queryUniqueUserSeries(PAYWALL_ANCHOR_EVENTS[0]),
+          queryUniqueUserSeries(PAYWALL_ANCHOR_EVENTS[1]),
+          queryUniqueUserSeries(PURCHASE_SUCCESS_EVENTS[0]),
+          queryUniqueUserSeries(PURCHASE_SUCCESS_EVENTS[1]),
+        ]);
+
+        const selectedPaywallSeries =
+          paywallAnchorByStart.eventName === PAYWALL_ANCHOR_EVENTS[0]
+            ? paywallShownSeries
+            : paywallEntrySeries;
+        const selectedPurchaseSeries =
+          bestPurchaseFromStart.eventName === PURCHASE_SUCCESS_EVENTS[0]
+            ? purchasePrimarySeries
+            : purchaseFallbackSeries;
+
+        const completionByTs = new Map(completionSeries.map((point) => [point.ts, point.value] as const));
+        const dropOffSeries = startersSeries.map((point) => ({
+          ts: point.ts,
+          value: Math.max(0, point.value - (completionByTs.get(point.ts) ?? 0)),
+        }));
+
+        trends = {
+          starters: computeTrendFromTimeseriesPoints(startersSeries),
+          completionRate: computeRateTrendFromTimeseriesPoints(completionSeries, startersSeries, 100),
+          dropOffRate: computeRateTrendFromTimeseriesPoints(dropOffSeries, startersSeries, 100),
+          paywallReachedRate: computeRateTrendFromTimeseriesPoints(
+            selectedPaywallSeries,
+            startersSeries,
+            100,
+          ),
+          purchaseRate: computeRateTrendFromTimeseriesPoints(selectedPurchaseSeries, startersSeries, 100),
+        };
+      }
+
       const eventOrder = new Map<string, number>(
         [...ONBOARDING_CORE_EVENTS, ...PAYWALL_JOURNEY_EVENT_ORDER].map((eventName, index) => [
           eventName,
@@ -683,6 +773,7 @@ getCommand
         purchaseRateFromStart: toPercent(bestPurchaseFromStart.count, starters),
         purchaseRateFromPaywall: toPercent(bestPurchaseFromPaywall.count, paywallExposedUsers),
         coverageRows,
+        ...(includeTrends ? { trends } : {}),
       };
 
       if (root.format === 'text') {
@@ -708,6 +799,15 @@ getCommand
           `skipped: ${payload.paywallSkippedUsers}/${payload.starters} (${payload.paywallSkipRateFromStart}%)`,
           `purchased: ${payload.purchasedUsers}/${payload.starters} (${payload.purchaseRateFromStart}%)`,
         ];
+        if (payload.trends) {
+          summaryLines.push(
+            `trend new users: ${formatTrendSummary(payload.trends.starters)}`,
+            `trend onboarding complete rate: ${formatTrendSummary(payload.trends.completionRate)}`,
+            `trend drop-off rate: ${formatTrendSummary(payload.trends.dropOffRate)}`,
+            `trend paywall reached rate: ${formatTrendSummary(payload.trends.paywallReachedRate)}`,
+            `trend purchase rate: ${formatTrendSummary(payload.trends.purchaseRate)}`,
+          );
+        }
         const table = renderTable(
           ['event', 'users', '%start'],
           payload.coverageRows.map((row) => [row.eventName, row.users, `${row.percentFromStart}%`]),
@@ -896,6 +996,7 @@ program
   .option('--interval <value>', '1h|1d', '1h')
   .option('--last <duration>', 'Time range like 7d', '7d')
   .option('--viz <mode>', 'none|table|chart|svg', 'none')
+  .option('--trend', 'Include trend from first to latest bucket', false)
   .option('--out <path>', 'Output file path for svg mode', './timeseries.svg')
   .option('--app-version <version>', 'Filter by appVersion')
   .option('--flow-id <id>', 'Filter by onboardingFlowId')
@@ -928,18 +1029,15 @@ program
       };
 
       const vizMode = String(options.viz ?? 'none');
-      if (vizMode === 'none') {
-        print(root.format, payload);
-        return;
-      }
-
       const points = asTimeseriesPoints(payload);
+      const trend = options.trend ? computeTrendFromTimeseriesPoints(points) : null;
       if (vizMode === 'table') {
         const table = renderTable(
           ['timestamp', 'value'],
           points.map((point) => [point.ts, point.value]),
         );
-        print('text', table);
+        const text = options.trend ? `${table}\n\ntrend: ${formatTrendSummary(trend)}` : table;
+        print('text', text);
         return;
       }
 
@@ -950,7 +1048,14 @@ program
             value: point.value,
           })),
         );
-        print('text', chart);
+        const text = options.trend ? `${chart}\n\ntrend: ${formatTrendSummary(trend)}` : chart;
+        print('text', text);
+        return;
+      }
+
+      if (vizMode === 'none') {
+        const output = options.trend ? { ...payload, trend } : payload;
+        print(root.format, output);
         return;
       }
 
@@ -964,6 +1069,7 @@ program
           ok: true,
           file: String(options.out),
           points: points.length,
+          ...(options.trend ? { trend } : {}),
         });
         return;
       }

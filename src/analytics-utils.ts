@@ -2,6 +2,15 @@ import type { TimeseriesPoint } from './render.js';
 import { ONBOARDING_SCREEN_EVENT_PREFIXES } from './constants.js';
 import type { FlowSelectorPayload, OutputFormat } from './types.js';
 
+export type TrendDirection = 'up' | 'down' | 'flat';
+
+export type SeriesTrend = {
+  startValue: number;
+  currentValue: number;
+  percentChange: number;
+  direction: TrendDirection;
+};
+
 export const formatOutput = (format: OutputFormat, payload: unknown): string => {
   if (format === 'json') {
     return JSON.stringify(payload, null, 2);
@@ -39,6 +48,114 @@ export const asTimeseriesPoints = (payload: unknown): TimeseriesPoint[] => {
       return { ts, value };
     })
     .filter((point): point is TimeseriesPoint => point !== null);
+};
+
+const computePercentChange = (startValue: number, currentValue: number): number => {
+  if (!Number.isFinite(startValue) || !Number.isFinite(currentValue)) {
+    return 0;
+  }
+
+  if (Math.abs(startValue) < 1e-9) {
+    if (Math.abs(currentValue) < 1e-9) return 0;
+    return currentValue > 0 ? 100 : -100;
+  }
+
+  return Number((((currentValue - startValue) / Math.abs(startValue)) * 100).toFixed(2));
+};
+
+export const computeTrendFromValues = (values: number[]): SeriesTrend | null => {
+  if (!Array.isArray(values) || values.length === 0) {
+    return null;
+  }
+
+  const finite = values.filter((value) => Number.isFinite(value));
+  if (finite.length === 0) {
+    return null;
+  }
+
+  const startValue = Number((finite[0] ?? 0).toFixed(4));
+  const currentValue = Number((finite[finite.length - 1] ?? 0).toFixed(4));
+  const percentChange = computePercentChange(startValue, currentValue);
+  const direction: TrendDirection =
+    percentChange > 0 ? 'up' : percentChange < 0 ? 'down' : 'flat';
+
+  return {
+    startValue,
+    currentValue,
+    percentChange,
+    direction,
+  };
+};
+
+export const computeTrendFromTimeseriesPoints = (points: TimeseriesPoint[]): SeriesTrend | null => {
+  if (!Array.isArray(points) || points.length === 0) {
+    return null;
+  }
+
+  const sorted = [...points].sort((a, b) => a.ts.localeCompare(b.ts));
+  return computeTrendFromValues(sorted.map((point) => point.value));
+};
+
+export const computeRateTrendFromTimeseriesPoints = (
+  numerators: TimeseriesPoint[],
+  denominators: TimeseriesPoint[],
+  scale = 100,
+): SeriesTrend | null => {
+  if (!numerators.length || !denominators.length) {
+    return null;
+  }
+
+  const numeratorByTs = new Map<string, number>();
+  for (const point of numerators) {
+    numeratorByTs.set(point.ts, point.value);
+  }
+
+  const denominatorByTs = new Map<string, number>();
+  for (const point of denominators) {
+    denominatorByTs.set(point.ts, point.value);
+  }
+
+  const timestamps = [...new Set([...numeratorByTs.keys(), ...denominatorByTs.keys()])].sort();
+  if (timestamps.length === 0) {
+    return null;
+  }
+
+  const values = timestamps.map((ts) => {
+    const numerator = numeratorByTs.get(ts) ?? 0;
+    const denominator = denominatorByTs.get(ts) ?? 0;
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+      return 0;
+    }
+    return (numerator / denominator) * scale;
+  });
+
+  return computeTrendFromValues(values);
+};
+
+export const formatTrendSummary = (trend: SeriesTrend | null): string => {
+  if (!trend) {
+    return 'n/a';
+  }
+
+  const signed = trend.percentChange > 0 ? `+${trend.percentChange.toFixed(2)}` : trend.percentChange.toFixed(2);
+  return `${trend.direction} ${signed}% (start=${trend.startValue}, current=${trend.currentValue})`;
+};
+
+export const resolveTrendInterval = (last: string): '1h' | '1d' => {
+  const match = /^([0-9]+)([dhm])$/.exec(String(last).trim());
+  if (!match) {
+    return '1d';
+  }
+
+  const amount = Number(match[1] ?? 0);
+  const unit = match[2];
+  if (unit === 'h') {
+    return amount <= 72 ? '1h' : '1d';
+  }
+  if (unit === 'm') {
+    return '1h';
+  }
+  return '1d';
 };
 
 export const print = (format: OutputFormat, payload: unknown): void => {
