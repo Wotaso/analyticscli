@@ -13,7 +13,10 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "tsx --test tests/**/*.test.ts",
+    "test:coverage": "node --experimental-test-coverage --import tsx --test tests/**/*.test.ts",
+    "test:coverage:gate": "node ../../scripts/coverage-gate.mjs cli",
+    "quality": "pnpm test:coverage:gate"
   },
   "dependencies": {
     "@prodinfos/config": "workspace:*",
