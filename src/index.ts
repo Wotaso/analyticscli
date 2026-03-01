@@ -932,6 +932,56 @@ const isOnboardingScreenEvent = (eventName: string): boolean => {
   return ONBOARDING_SCREEN_EVENT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 };
 
+const parseIntegerOption = (
+  value: unknown,
+  optionName: string,
+  min: number,
+  max: number,
+): number => {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < min || numeric > max) {
+    throw Object.assign(
+      new Error(`${optionName} must be an integer between ${min} and ${max}.`),
+      { exitCode: 2 },
+    );
+  }
+  return numeric;
+};
+
+const parseRetentionDaysOption = (value: unknown): number[] => {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw Object.assign(
+      new Error('--days must be a comma-separated list like 1,7,30'),
+      { exitCode: 2 },
+    );
+  }
+
+  const parsed = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const day = Number(entry);
+      if (!Number.isInteger(day) || day < 1 || day > 365) {
+        throw Object.assign(
+          new Error('--days must only contain integers between 1 and 365'),
+          { exitCode: 2 },
+        );
+      }
+      return day;
+    });
+
+  const uniqueSorted = [...new Set(parsed)].sort((a, b) => a - b);
+  if (uniqueSorted.length === 0 || uniqueSorted.length > 30) {
+    throw Object.assign(
+      new Error('--days must contain between 1 and 30 unique values'),
+      { exitCode: 2 },
+    );
+  }
+
+  return uniqueSorted;
+};
+
 const includeDebugFlag = (): boolean => {
   const root = program.opts<{ includeDebug?: boolean }>();
   return Boolean(root.includeDebug);
@@ -1760,6 +1810,76 @@ program
       }
 
       throw Object.assign(new Error('Invalid --viz mode. Use none|table|chart|svg'), { exitCode: 2 });
+    });
+  });
+
+program
+  .command('retention')
+  .description('Cohort retention by day offsets (e.g. D1/D7/D30) with avg active days')
+  .requiredOption('--project <id>', 'Project ID')
+  .option('--anchor-event <name>', 'Cohort anchor event', ONBOARDING_START_EVENT)
+  .option('--active-event <name>', 'Optional active event filter (default: any event)')
+  .option('--days <list>', 'Comma-separated day offsets, e.g. 1,7,30', '1,7,30')
+  .option('--max-age-days <n>', 'Observation horizon in days for avg active span', '90')
+  .option('--last <duration>', 'Cohort time range like 30d', '30d')
+  .option('--app-version <version>', 'Filter by appVersion')
+  .option('--flow-id <id>', 'Filter by onboardingFlowId')
+  .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
+  .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
+  .option('--paywall-id <id>', 'Filter by paywallId')
+  .action(async (options) => {
+    await withErrorHandling(async () => {
+      const root = program.opts<{ apiUrl?: string; token?: string; format: OutputFormat }>();
+      const days = parseRetentionDaysOption(options.days);
+      const maxAgeDays = parseIntegerOption(options.maxAgeDays, '--max-age-days', 1, 365);
+
+      const payload = (await requestApi(
+        'POST',
+        '/v1/query/retention',
+        {
+          ...resolveProjectOption(options.project),
+          anchorEvent: options.anchorEvent,
+          activeEvent: options.activeEvent,
+          days,
+          maxAgeDays,
+          last: options.last,
+          includeDebug: includeDebugFlag(),
+          ...resolveFlowSelectorOption(options),
+        },
+        {
+          apiUrl: root.apiUrl,
+          token: root.token,
+        },
+      )) as {
+        anchorEvent: string;
+        activeEvent: string | null;
+        cohortSize: number;
+        avgActiveDays: number;
+        maxAgeDays: number;
+        days: Array<{ day: number; retainedUsers: number; retentionRate: number }>;
+      };
+
+      if (root.format === 'text') {
+        const summary = [
+          `Retention cohort (${options.last})`,
+          `anchor event: ${payload.anchorEvent}`,
+          `active event: ${payload.activeEvent ?? 'any event'}`,
+          `cohort size: ${payload.cohortSize}`,
+          `avg active days: ${payload.avgActiveDays}`,
+        ].join('\n');
+        const table = renderTable(
+          ['day', 'retained_users', 'retention_rate'],
+          payload.days.map((row) => [
+            `D${row.day}`,
+            row.retainedUsers,
+            `${(row.retentionRate * 100).toFixed(2)}%`,
+          ]),
+        );
+        print('text', `${summary}\n\n${table}`);
+        return;
+      }
+
+      print(root.format, payload);
     });
   });
 
