@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { print } from '../analytics-utils.js';
 import { mapStatusToExitCode } from '../http.js';
 import type { CliCommandContext } from './context.js';
@@ -28,7 +29,7 @@ export const registerDevCommands = (context: CliCommandContext): void => {
 
             events.push(
               {
-                eventId: `fixture-${i}-1`,
+                eventId: randomUUID(),
                 eventName: 'screen:home',
                 ts: new Date(now).toISOString(),
                 sessionId,
@@ -36,7 +37,7 @@ export const registerDevCommands = (context: CliCommandContext): void => {
                 properties: { appVersion: i % 2 === 0 ? '1.0.0' : '1.1.0' },
               },
               {
-                eventId: `fixture-${i}-2`,
+                eventId: randomUUID(),
                 eventName: i % 3 === 0 ? 'click:cta_upgrade' : 'scroll:pricing',
                 ts: new Date(now + 1000).toISOString(),
                 sessionId,
@@ -47,7 +48,7 @@ export const registerDevCommands = (context: CliCommandContext): void => {
 
             if (i % 4 === 0) {
               events.push({
-                eventId: `fixture-${i}-3`,
+                eventId: randomUUID(),
                 eventName: 'feedback_submitted',
                 ts: new Date(now + 2000).toISOString(),
                 sessionId,

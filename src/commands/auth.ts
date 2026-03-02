@@ -28,15 +28,16 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
         const root = getRootOptions();
         const config = await readConfig();
         const apiUrl = (root.apiUrl ?? config.apiUrl).replace(/\/$/, '');
+        const directToken = options.token ?? root.token;
 
-        if (!options.token && !options.clerkJwt) {
+        if (!directToken && !options.clerkJwt) {
           throw Object.assign(new Error('Provide --token or --clerk-jwt'), { exitCode: 2 });
         }
 
         const now = new Date().toISOString();
 
-        if (options.token) {
-          const persisted = await persistAuthToken(config, apiUrl, options.token);
+        if (directToken) {
+          const persisted = await persistAuthToken(config, apiUrl, directToken);
 
           print(root.format, {
             ok: true,
@@ -85,7 +86,7 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
           const root = getRootOptions();
           const agents = parseSetupAgents(String(options.agents ?? 'all'));
           const result = await runSetupFlow(root, {
-            token: options.token,
+            token: options.token ?? root.token,
             clerkJwt: options.clerkJwt,
             skipLogin: options.skipLogin,
             skipSkills: options.skipSkills,
@@ -128,7 +129,7 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
           }
 
           const selectedAgents: SetupAgent[] = [];
-          let token = options.token;
+          let token = options.token ?? root.token;
           let clerkJwt = options.clerkJwt;
           let skipLogin = false;
           let autoSkillUpdate = options.autoSkillUpdate;
