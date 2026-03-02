@@ -127,15 +127,7 @@ export const runSetupFlow = async (
   };
 
   if (!options.skipLogin) {
-    if (options.token) {
-      const persisted = await persistAuthToken(activeConfig, apiUrl, options.token);
-      activeConfig = persisted.config;
-      loginResult = {
-        ok: true,
-        mode: 'direct_token',
-        tokenStorage: persisted.storage,
-      };
-    } else if (options.clerkJwt) {
+    if (options.clerkJwt) {
       const exchanged = await exchangeClerkJwtForReadonlyToken(apiUrl, options.clerkJwt);
       const persisted = await persistAuthToken(activeConfig, apiUrl, exchanged.token);
       activeConfig = persisted.config;
@@ -155,7 +147,7 @@ export const runSetupFlow = async (
     } else {
       throw Object.assign(
         new Error(
-          'Provide --token or --clerk-jwt for setup login, or pass --skip-login if you want skills only.',
+          'Provide --clerk-jwt for setup login, or pass --skip-login if you want skills only.',
         ),
         { exitCode: 2 },
       );
@@ -220,33 +212,29 @@ export const promptRequiredValue = async (rl: PromptClient, question: string): P
 export const promptLoginMode = async (
   rl: PromptClient,
   hasExistingToken: boolean,
-): Promise<'token' | 'clerk' | 'existing' | 'skip'> => {
+): Promise<'clerk' | 'existing' | 'skip'> => {
   while (true) {
     process.stdout.write('\nLogin method:\n');
-    process.stdout.write('  1) Readonly token\n');
-    process.stdout.write('  2) Clerk JWT\n');
+    process.stdout.write('  1) Clerk JWT\n');
     if (hasExistingToken) {
-      process.stdout.write('  3) Use existing token\n');
-      process.stdout.write('  4) Skip for now\n');
-    } else {
+      process.stdout.write('  2) Use existing token\n');
       process.stdout.write('  3) Skip for now\n');
+    } else {
+      process.stdout.write('  2) Skip for now\n');
     }
 
-    const maxChoice = hasExistingToken ? 4 : 3;
-    const defaultChoice = hasExistingToken ? '3' : '1';
+    const maxChoice = hasExistingToken ? 3 : 2;
+    const defaultChoice = hasExistingToken ? '2' : '1';
     const answer = (await rl.question(`Select [1-${maxChoice}] (default ${defaultChoice}): `)).trim();
     const choice = answer || defaultChoice;
 
     if (choice === '1') {
-      return 'token';
-    }
-    if (choice === '2') {
       return 'clerk';
     }
-    if (choice === '3' && hasExistingToken) {
+    if (choice === '2' && hasExistingToken) {
       return 'existing';
     }
-    if (choice === '3' || choice === '4') {
+    if (choice === '2' || choice === '3') {
       return 'skip';
     }
 

@@ -33,14 +33,13 @@ export type SkillInstallResult = {
 export type SetupLoginResult = {
   ok: boolean;
   skipped?: boolean;
-  mode?: 'direct_token' | 'clerk_exchange' | 'existing_token';
+  mode?: 'clerk_exchange' | 'existing_token';
   tokenStorage?: 'config_file' | 'system_keychain';
   tenantId?: unknown;
   projectIds?: unknown;
 };
 
 export type SetupExecutionOptions = {
-  token?: string;
   clerkJwt?: string;
   skipLogin?: boolean;
   skipSkills?: boolean;
