@@ -23,20 +23,14 @@ export const CLI_SESSION_ID = `cli-session-${CLI_RUN_ID}`;
 
 export const ONBOARDING_START_EVENT = 'onboarding:start';
 export const ONBOARDING_CORE_EVENTS = [
-  'onboarding:step_view',
-  'onboarding:step_complete',
   'onboarding:complete',
   'onboarding:skip',
 ] as const;
 export const PAYWALL_JOURNEY_EVENT_ORDER = [
-  'paywall:entry',
   'paywall:shown',
-  'paywall:cta_clicked',
   'paywall:skip',
-  'subscription:purchase_started',
   'subscription:purchase_success',
   'subscription:purchase_failed',
-  'subscription:cancel',
 ] as const;
 export const ONBOARDING_SCREEN_EVENT_PREFIXES = ['screen:onboarding', 'screen:onboarding_'] as const;
 export const PAYWALL_ANCHOR_EVENTS = ['paywall:shown', 'paywall:entry'] as const;
