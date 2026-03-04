@@ -36,3 +36,4 @@ export const ONBOARDING_SCREEN_EVENT_PREFIXES = ['screen:onboarding', 'screen:on
 export const PAYWALL_ANCHOR_EVENTS = ['paywall:shown', 'paywall:entry'] as const;
 export const PAYWALL_SKIP_EVENTS = ['paywall:skip', 'paywall:dismissed'] as const;
 export const PURCHASE_SUCCESS_EVENTS = ['subscription:purchase_success', 'purchase:success'] as const;
+export const ONBOARDING_PAYWALL_SOURCE = 'onboarding' as const;

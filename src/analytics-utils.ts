@@ -201,6 +201,7 @@ export const resolveFlowSelectorOption = (options: {
   flowVersion?: string;
   variant?: string;
   paywallId?: string;
+  source?: string;
 }): { flow?: FlowSelectorPayload } => {
   const flow: FlowSelectorPayload = {
     appVersion: normalizeOptionString(options.appVersion),
@@ -208,10 +209,34 @@ export const resolveFlowSelectorOption = (options: {
     onboardingFlowVersion: normalizeOptionString(options.flowVersion),
     experimentVariant: normalizeOptionString(options.variant),
     paywallId: normalizeOptionString(options.paywallId),
+    source: normalizeOptionString(options.source),
   };
 
   const hasAny = Object.values(flow).some((value) => typeof value === 'string' && value.length > 0);
   return hasAny ? { flow } : {};
+};
+
+export const mergeFlowSelector = (
+  base: FlowSelectorPayload | undefined,
+  override: Partial<FlowSelectorPayload> | undefined,
+): FlowSelectorPayload | undefined => {
+  const merged: FlowSelectorPayload = {
+    ...(base ?? {}),
+    ...(override ?? {}),
+  };
+
+  const hasAny = Object.values(merged).some((value) => typeof value === 'string' && value.length > 0);
+  return hasAny ? merged : undefined;
+};
+
+export const isPaywallJourneyEvent = (eventName: string): boolean => {
+  const normalized = eventName.trim().toLowerCase();
+  return (
+    normalized.startsWith('paywall:') ||
+    normalized.startsWith('subscription:') ||
+    normalized === 'purchase:success' ||
+    normalized === 'paywall:dismissed'
+  );
 };
 
 export const toPercent = (value: number, total: number): number => {

@@ -17,6 +17,7 @@ type FlowSelectionOptions = {
   flowVersion?: string;
   variant?: string;
   paywallId?: string;
+  source?: string;
 };
 
 type RootQueryOptions = FlowSelectionOptions & {
@@ -44,6 +45,7 @@ export const registerAdvancedQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(
       async (
         options: RootQueryOptions & {
@@ -125,6 +127,7 @@ export const registerAdvancedQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(
       async (
         options: RootQueryOptions & {
@@ -242,6 +245,7 @@ export const registerAdvancedQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(
       async (
         options: RootQueryOptions & {

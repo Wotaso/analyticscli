@@ -24,6 +24,7 @@ type FlowSelectionOptions = {
   flowVersion?: string;
   variant?: string;
   paywallId?: string;
+  source?: string;
 };
 
 type RootQueryOptions = FlowSelectionOptions & {
@@ -48,6 +49,7 @@ export const registerCoreQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(async (options: RootQueryOptions & { steps: string; within: string }) => {
       await withErrorHandling(async () => {
         const root = getRootOptions();
@@ -88,6 +90,7 @@ export const registerCoreQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(async (options: RootQueryOptions & { from: string; to: string; within: string }) => {
       await withErrorHandling(async () => {
         const root = getRootOptions();
@@ -127,6 +130,7 @@ export const registerCoreQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(async (options: RootQueryOptions & { start: string; complete: string; within: string }) => {
       await withErrorHandling(async () => {
         const root = getRootOptions();
@@ -181,6 +185,7 @@ export const registerCoreQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(async (options: RootQueryOptions & { from: string; top: string; within: string }) => {
       await withErrorHandling(async () => {
         const root = getRootOptions();
@@ -220,6 +225,7 @@ export const registerCoreQueryCommands = (
     .option('--flow-version <version>', 'Filter by onboardingFlowVersion')
     .option('--variant <name>', 'Filter by experimentVariant (A/B variant)')
     .option('--paywall-id <id>', 'Filter by paywallId')
+    .option('--source <name>', 'Filter by properties.source')
     .action(
       async (
         options: RootQueryOptions & {

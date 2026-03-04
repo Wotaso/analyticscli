@@ -5,6 +5,8 @@ import {
   computeTrendFromTimeseriesPoints,
   formatTrendSummary,
   isOnboardingScreenEvent,
+  isPaywallJourneyEvent,
+  mergeFlowSelector,
   pickBetterAlias,
   print,
   resolveFlowSelectorOption,
@@ -15,6 +17,7 @@ import {
 import {
   ONBOARDING_CORE_EVENTS,
   ONBOARDING_START_EVENT,
+  ONBOARDING_PAYWALL_SOURCE,
   PAYWALL_ANCHOR_EVENTS,
   PAYWALL_JOURNEY_EVENT_ORDER,
   PAYWALL_SKIP_EVENTS,
@@ -50,6 +53,7 @@ const formatFlowSummary = (flowSelection: FlowSelectorPayload | undefined): stri
     flowSelection.onboardingFlowVersion ? `flowVersion=${flowSelection.onboardingFlowVersion}` : null,
     flowSelection.experimentVariant ? `variant=${flowSelection.experimentVariant}` : null,
     flowSelection.paywallId ? `paywallId=${flowSelection.paywallId}` : null,
+    flowSelection.source ? `source=${flowSelection.source}` : null,
   ]
     .filter((entry): entry is string => Boolean(entry))
     .join(', ');
@@ -80,6 +84,9 @@ export const registerOnboardingJourneyCommand = (
         const flowSelection = resolveFlowSelectorOption(options).flow;
         const includeTrends = Boolean(options.withTrends);
         const trendInterval = resolveTrendInterval(String(options.last));
+        const paywallFlowSelection = mergeFlowSelector(flowSelection, {
+          source: ONBOARDING_PAYWALL_SOURCE,
+        });
 
         const queryConversion = async (from: string, to: string) => {
           return (await requestApi(
@@ -93,6 +100,12 @@ export const registerOnboardingJourneyCommand = (
               last: options.last,
               includeDebug: includeDebugFlag(),
               ...(flowSelection ? { flow: flowSelection } : {}),
+              ...(isPaywallJourneyEvent(from) && paywallFlowSelection
+                ? { fromFlow: paywallFlowSelection }
+                : {}),
+              ...(isPaywallJourneyEvent(to) && paywallFlowSelection
+                ? { toFlow: paywallFlowSelection }
+                : {}),
             },
             {
               apiUrl: root.apiUrl,
@@ -122,7 +135,13 @@ export const registerOnboardingJourneyCommand = (
               interval: trendInterval,
               last: options.last,
               includeDebug: includeDebugFlag(),
-              ...(flowSelection ? { flow: flowSelection } : {}),
+              ...(isPaywallJourneyEvent(eventName)
+                ? paywallFlowSelection
+                  ? { flow: paywallFlowSelection }
+                  : {}
+                : flowSelection
+                  ? { flow: flowSelection }
+                  : {}),
             },
             {
               apiUrl: root.apiUrl,
@@ -357,6 +376,7 @@ export const registerOnboardingJourneyCommand = (
           const summaryLines = [
             `Onboarding journey (${options.last}, within=${options.within})`,
             `flow: ${formatFlowSummary(flowSelection)}`,
+            `paywall source: ${ONBOARDING_PAYWALL_SOURCE}`,
             `starters: ${payload.starters}`,
             `completion: ${payload.completedUsers}/${payload.starters} (${payload.completionRate}%)`,
             `paywall reached: ${payload.paywallReachedUsers}/${payload.starters} (${payload.paywallReachedRate}%) via ${payload.paywallAnchorEvent}`,

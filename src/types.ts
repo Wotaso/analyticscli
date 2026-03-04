@@ -75,4 +75,5 @@ export type FlowSelectorPayload = {
   onboardingFlowVersion?: string;
   experimentVariant?: string;
   paywallId?: string;
+  source?: string;
 };
