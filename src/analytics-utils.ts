@@ -284,6 +284,40 @@ export const parseIntegerOption = (
   return numeric;
 };
 
+export const parseCsvOption = (
+  value: unknown,
+  optionName: string,
+  {
+    minItems = 0,
+    maxItems = 100,
+  }: {
+    minItems?: number;
+    maxItems?: number;
+  } = {},
+): string[] => {
+  if (typeof value !== 'string') {
+    if (minItems > 0) {
+      throw Object.assign(new Error(`${optionName} must be a comma-separated list`), { exitCode: 2 });
+    }
+    return [];
+  }
+
+  const entries = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const uniqueEntries = [...new Set(entries)];
+
+  if (uniqueEntries.length < minItems || uniqueEntries.length > maxItems) {
+    throw Object.assign(
+      new Error(`${optionName} must contain between ${minItems} and ${maxItems} unique values`),
+      { exitCode: 2 },
+    );
+  }
+
+  return uniqueEntries;
+};
+
 export const parseRetentionDaysOption = (value: unknown): number[] => {
   if (typeof value !== 'string' || !value.trim()) {
     throw Object.assign(

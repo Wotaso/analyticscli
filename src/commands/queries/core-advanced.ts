@@ -1,5 +1,7 @@
 import type { Command } from 'commander';
 import {
+  normalizeOptionString,
+  parseCsvOption,
   parseIntegerOption,
   parseRetentionDaysOption,
   print,
@@ -25,11 +27,232 @@ type RootQueryOptions = FlowSelectionOptions & {
   last: string;
 };
 
+const GENERIC_METRICS = ['event_count', 'unique_sessions', 'unique_users'] as const;
+const GENERIC_DIMENSIONS = [
+  'eventName',
+  'platform',
+  'appVersion',
+  'country',
+  'region',
+  'city',
+  'runtimeEnv',
+  'day',
+  'hour',
+] as const;
+const GENERIC_ORDER_BY = ['value_desc', 'value_asc', 'dimension_asc', 'dimension_desc'] as const;
+const GENERIC_RUNTIME_ENVS = ['production', 'development', 'test', 'staging'] as const;
+
+const parseEnumOption = <T extends readonly string[]>(
+  value: unknown,
+  optionName: string,
+  allowed: T,
+): T[number] => {
+  const normalized = normalizeOptionString(value);
+  if (!normalized || !allowed.includes(normalized as T[number])) {
+    throw Object.assign(new Error(`${optionName} must be one of: ${allowed.join(', ')}`), { exitCode: 2 });
+  }
+  return normalized as T[number];
+};
+
+const parseGenericGroupByOption = (value: unknown): Array<(typeof GENERIC_DIMENSIONS)[number]> => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return [];
+  }
+
+  const dimensions = parseCsvOption(value, '--group-by', {
+    minItems: 1,
+    maxItems: 3,
+  });
+  const invalid = dimensions.find(
+    (dimension) => !(GENERIC_DIMENSIONS as readonly string[]).includes(dimension),
+  );
+  if (invalid) {
+    throw Object.assign(
+      new Error(`--group-by contains unsupported dimension "${invalid}"`),
+      { exitCode: 2 },
+    );
+  }
+
+  if (dimensions.includes('day') && dimensions.includes('hour')) {
+    throw Object.assign(new Error('--group-by cannot contain both day and hour'), {
+      exitCode: 2,
+    });
+  }
+
+  return dimensions as Array<(typeof GENERIC_DIMENSIONS)[number]>;
+};
+
+const parseGenericRuntimeEnvsOption = (value: unknown): Array<(typeof GENERIC_RUNTIME_ENVS)[number]> => {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return [];
+  }
+
+  const values = parseCsvOption(value, '--runtime-envs', {
+    minItems: 1,
+    maxItems: 4,
+  }).map((entry) => entry.toLowerCase());
+  const invalid = values.find((entry) => !(GENERIC_RUNTIME_ENVS as readonly string[]).includes(entry));
+  if (invalid) {
+    throw Object.assign(
+      new Error(`--runtime-envs contains unsupported value "${invalid}"`),
+      { exitCode: 2 },
+    );
+  }
+
+  return values as Array<(typeof GENERIC_RUNTIME_ENVS)[number]>;
+};
+
+const resolveGenericTimeRange = (options: { last: string; since?: string; until?: string }) => {
+  const since = normalizeOptionString(options.since);
+  const until = normalizeOptionString(options.until);
+
+  if ((since && !until) || (!since && until)) {
+    throw Object.assign(new Error('Use --since and --until together, or use --last'), {
+      exitCode: 2,
+    });
+  }
+
+  if (since && until) {
+    return { since, until };
+  }
+
+  return { last: options.last };
+};
+
 export const registerAdvancedQueryCommands = (
   program: Command,
   context: CliCommandContext,
 ): void => {
   const { withErrorHandling, getRootOptions, includeDebugFlag } = context;
+
+  program
+    .command('generic')
+    .description('Flexible, policy-limited grouped analytics query')
+    .requiredOption('--project <id>', 'Project ID')
+    .option('--metric <metric>', `Metric: ${GENERIC_METRICS.join('|')}`, 'event_count')
+    .option('--group-by <list>', `Comma-separated dimensions: ${GENERIC_DIMENSIONS.join(',')}`)
+    .option('--events <list>', 'Optional event-name filters, comma-separated')
+    .option('--platforms <list>', 'Optional platform filters, comma-separated')
+    .option('--app-versions <list>', 'Optional appVersion filters, comma-separated')
+    .option('--countries <list>', 'Optional country filters, comma-separated')
+    .option('--runtime-envs <list>', `Optional runtimeEnv filters: ${GENERIC_RUNTIME_ENVS.join(',')}`)
+    .option('--limit <n>', 'Row limit (policy capped at 200)', '100')
+    .option('--order-by <mode>', `Ordering: ${GENERIC_ORDER_BY.join('|')}`, 'value_desc')
+    .option('--last <duration>', 'Time range like 7d', '7d')
+    .option('--since <iso>', 'Optional ISO start timestamp (requires --until)')
+    .option('--until <iso>', 'Optional ISO end timestamp (requires --since)')
+    .option('--app-version <version>', 'Flow selector: appVersion')
+    .option('--flow-id <id>', 'Flow selector: onboardingFlowId')
+    .option('--flow-version <version>', 'Flow selector: onboardingFlowVersion')
+    .option('--variant <name>', 'Flow selector: experimentVariant')
+    .option('--paywall-id <id>', 'Flow selector: paywallId')
+    .option('--source <name>', 'Flow selector: properties.source')
+    .action(
+      async (
+        options: RootQueryOptions & {
+          metric: string;
+          groupBy?: string;
+          events?: string;
+          platforms?: string;
+          appVersions?: string;
+          countries?: string;
+          runtimeEnvs?: string;
+          limit: string;
+          orderBy: string;
+          since?: string;
+          until?: string;
+        },
+      ) => {
+        await withErrorHandling(async () => {
+          const root = getRootOptions();
+          const metric = parseEnumOption(options.metric, '--metric', GENERIC_METRICS);
+          const orderBy = parseEnumOption(options.orderBy, '--order-by', GENERIC_ORDER_BY);
+          const groupBy = parseGenericGroupByOption(options.groupBy);
+          const limit = parseIntegerOption(options.limit, '--limit', 1, 200);
+          const runtimeEnvs = parseGenericRuntimeEnvsOption(options.runtimeEnvs);
+
+          const eventNames = parseCsvOption(options.events, '--events', { maxItems: 50 });
+          const platforms = parseCsvOption(options.platforms, '--platforms', { maxItems: 20 });
+          const appVersions = parseCsvOption(options.appVersions, '--app-versions', { maxItems: 20 });
+          const countries = parseCsvOption(options.countries, '--countries', { maxItems: 50 });
+
+          const filters: {
+            eventNames?: string[];
+            platforms?: string[];
+            appVersions?: string[];
+            countries?: string[];
+            runtimeEnvs?: string[];
+          } = {};
+          if (eventNames.length > 0) filters.eventNames = eventNames;
+          if (platforms.length > 0) filters.platforms = platforms;
+          if (appVersions.length > 0) filters.appVersions = appVersions;
+          if (countries.length > 0) filters.countries = countries;
+          if (runtimeEnvs.length > 0) filters.runtimeEnvs = runtimeEnvs;
+
+          const payload = (await requestApi(
+            'POST',
+            '/v1/query/generic',
+            {
+              ...resolveProjectOption(options.project),
+              metric,
+              groupBy,
+              limit,
+              orderBy,
+              includeDebug: includeDebugFlag(),
+              ...resolveGenericTimeRange(options),
+              ...(Object.keys(filters).length > 0 ? { filters } : {}),
+              ...resolveFlowSelectorOption(options),
+            },
+            {
+              apiUrl: root.apiUrl,
+              token: root.token,
+            },
+          )) as {
+            metric: string;
+            groupBy: string[];
+            limit: number;
+            orderBy: string;
+            rows: Array<{ dimensions: Record<string, string>; value: number }>;
+            plan: {
+              mode: 'raw' | 'aggregate';
+              source: string;
+              sourceUsed: string;
+              estimatedCost: 'low' | 'medium' | 'high';
+              reason: string;
+            };
+            timeRange: { since: string; until: string };
+          };
+
+          if (root.format === 'text') {
+            const summary = [
+              `Generic query (${payload.timeRange.since} -> ${payload.timeRange.until})`,
+              `metric: ${payload.metric}`,
+              `groupBy: ${payload.groupBy.length > 0 ? payload.groupBy.join(', ') : '(none)'}`,
+              `rows: ${payload.rows.length}/${payload.limit} (order=${payload.orderBy})`,
+              `plan: ${payload.plan.mode} ${payload.plan.sourceUsed} (requested=${payload.plan.source}, cost=${payload.plan.estimatedCost})`,
+              `reason: ${payload.plan.reason}`,
+            ].join('\n');
+
+            if (payload.rows.length === 0) {
+              print('text', `${summary}\n\nNo rows found for the selected range/filters.`);
+              return;
+            }
+
+            const dimensionColumns = payload.groupBy;
+            const header = [...dimensionColumns, 'value'];
+            const tableRows = payload.rows.map((row) => [
+              ...dimensionColumns.map((column) => row.dimensions[column] ?? '(unknown)'),
+              row.value,
+            ]);
+            const table = renderTable(header, tableRows);
+            print('text', `${summary}\n\n${table}`);
+            return;
+          }
+
+          print(root.format, payload);
+        });
+      },
+    );
 
   program
     .command('retention')

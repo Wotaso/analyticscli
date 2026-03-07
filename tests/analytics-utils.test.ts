@@ -4,6 +4,7 @@ import {
   computeRateTrendFromTimeseriesPoints,
   computeTrendFromTimeseriesPoints,
   formatTrendSummary,
+  parseCsvOption,
   resolveTrendInterval,
 } from '../src/analytics-utils.js';
 
@@ -63,4 +64,16 @@ test('resolveTrendInterval picks hourly for short windows and daily for long win
   assert.equal(resolveTrendInterval('24h'), '1h');
   assert.equal(resolveTrendInterval('7d'), '1d');
   assert.equal(resolveTrendInterval('15m'), '1h');
+});
+
+test('parseCsvOption trims and deduplicates values', () => {
+  const parsed = parseCsvOption(' eventName , day,eventName ', '--group-by', { maxItems: 3 });
+  assert.deepEqual(parsed, ['eventName', 'day']);
+});
+
+test('parseCsvOption enforces item bounds', () => {
+  assert.throws(
+    () => parseCsvOption('a,b,c,d', '--group-by', { minItems: 1, maxItems: 3 }),
+    /between 1 and 3 unique values/,
+  );
 });
