@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@prodinfos/config": "workspace:*",
+    "@prodinfos/shared": "workspace:*",
     "commander": "^13.1.0"
   },
   "devDependencies": {

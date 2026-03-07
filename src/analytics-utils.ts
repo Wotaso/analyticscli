@@ -233,9 +233,7 @@ export const isPaywallJourneyEvent = (eventName: string): boolean => {
   const normalized = eventName.trim().toLowerCase();
   return (
     normalized.startsWith('paywall:') ||
-    normalized.startsWith('subscription:') ||
-    normalized === 'purchase:success' ||
-    normalized === 'paywall:dismissed'
+    normalized.startsWith('purchase:')
   );
 };
 

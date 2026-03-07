@@ -1,4 +1,13 @@
 import { readCliEnv } from '@prodinfos/config';
+import {
+  ONBOARDING_EVENTS,
+  ONBOARDING_PROGRESS_EVENT_ORDER,
+  ONBOARDING_SCREEN_EVENT_PREFIXES as SHARED_ONBOARDING_SCREEN_EVENT_PREFIXES,
+  PAYWALL_ANCHOR_EVENT_CANDIDATES,
+  PAYWALL_JOURNEY_EVENT_ORDER as SHARED_PAYWALL_JOURNEY_EVENT_ORDER,
+  PAYWALL_SKIP_EVENT_CANDIDATES,
+  PURCHASE_SUCCESS_EVENT_CANDIDATES,
+} from '@prodinfos/shared';
 
 export const env = readCliEnv();
 
@@ -21,19 +30,11 @@ export const CLI_RUN_ID = `${Date.now()}-${Math.random().toString(16).slice(2, 1
 export const CLI_ANON_ID = `cli-${CLI_RUN_ID}`;
 export const CLI_SESSION_ID = `cli-session-${CLI_RUN_ID}`;
 
-export const ONBOARDING_START_EVENT = 'onboarding:start';
-export const ONBOARDING_CORE_EVENTS = [
-  'onboarding:complete',
-  'onboarding:skip',
-] as const;
-export const PAYWALL_JOURNEY_EVENT_ORDER = [
-  'paywall:shown',
-  'paywall:skip',
-  'subscription:purchase_success',
-  'subscription:purchase_failed',
-] as const;
-export const ONBOARDING_SCREEN_EVENT_PREFIXES = ['screen:onboarding', 'screen:onboarding_'] as const;
-export const PAYWALL_ANCHOR_EVENTS = ['paywall:shown', 'paywall:entry'] as const;
-export const PAYWALL_SKIP_EVENTS = ['paywall:skip', 'paywall:dismissed'] as const;
-export const PURCHASE_SUCCESS_EVENTS = ['subscription:purchase_success', 'purchase:success'] as const;
+export const ONBOARDING_START_EVENT = ONBOARDING_EVENTS.START;
+export const ONBOARDING_CORE_EVENTS = ONBOARDING_PROGRESS_EVENT_ORDER;
+export const PAYWALL_JOURNEY_EVENT_ORDER = SHARED_PAYWALL_JOURNEY_EVENT_ORDER;
+export const ONBOARDING_SCREEN_EVENT_PREFIXES = SHARED_ONBOARDING_SCREEN_EVENT_PREFIXES;
+export const PAYWALL_ANCHOR_EVENTS = PAYWALL_ANCHOR_EVENT_CANDIDATES;
+export const PAYWALL_SKIP_EVENTS = PAYWALL_SKIP_EVENT_CANDIDATES;
+export const PURCHASE_SUCCESS_EVENTS = PURCHASE_SUCCESS_EVENT_CANDIDATES;
 export const ONBOARDING_PAYWALL_SOURCE = 'onboarding' as const;

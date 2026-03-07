@@ -7,7 +7,6 @@ import {
   isOnboardingScreenEvent,
   isPaywallJourneyEvent,
   mergeFlowSelector,
-  pickBetterAlias,
   print,
   resolveFlowSelectorOption,
   resolveProjectOption,
@@ -118,6 +117,37 @@ export const registerOnboardingJourneyCommand = (
           };
         };
 
+        const queryBestConversion = async (
+          from: string,
+          candidates: readonly string[],
+        ): Promise<{
+          eventName: string;
+          count: number;
+          totalFrom: number;
+        }> => {
+          const uniqueCandidates = [...new Set(candidates.filter((value) => value.trim().length > 0))];
+          if (uniqueCandidates.length === 0) {
+            return {
+              eventName: '',
+              count: 0,
+              totalFrom: 0,
+            };
+          }
+
+          const rows = await Promise.all(
+            uniqueCandidates.map(async (eventName) => {
+              const result = await queryConversion(from, eventName);
+              return {
+                eventName,
+                count: result.totalConverted,
+                totalFrom: result.totalFrom,
+              };
+            }),
+          );
+
+          return rows.reduce((best, current) => (current.count > best.count ? current : best));
+        };
+
         const trendTimeseriesCache = new Map<string, Promise<TimeseriesPoint[]>>();
         const queryUniqueUserSeries = (eventName: string) => {
           const existing = trendTimeseriesCache.get(eventName);
@@ -170,23 +200,7 @@ export const registerOnboardingJourneyCommand = (
           items?: Array<{ eventName?: string }>;
         };
 
-        const [
-          completionFromStart,
-          startToPaywallShown,
-          startToPaywallEntry,
-          startToSkipPrimary,
-          startToSkipFallback,
-          startToPurchasePrimary,
-          startToPurchaseFallback,
-        ] = await Promise.all([
-          queryConversion(ONBOARDING_START_EVENT, 'onboarding:complete'),
-          queryConversion(ONBOARDING_START_EVENT, PAYWALL_ANCHOR_EVENTS[0]),
-          queryConversion(ONBOARDING_START_EVENT, PAYWALL_ANCHOR_EVENTS[1]),
-          queryConversion(ONBOARDING_START_EVENT, PAYWALL_SKIP_EVENTS[0]),
-          queryConversion(ONBOARDING_START_EVENT, PAYWALL_SKIP_EVENTS[1]),
-          queryConversion(ONBOARDING_START_EVENT, PURCHASE_SUCCESS_EVENTS[0]),
-          queryConversion(ONBOARDING_START_EVENT, PURCHASE_SUCCESS_EVENTS[1]),
-        ]);
+        const completionFromStart = await queryConversion(ONBOARDING_START_EVENT, 'onboarding:complete');
 
         const discoveredEventNames = (schemaPayload.items ?? [])
           .map((item) => (typeof item.eventName === 'string' ? item.eventName : ''))
@@ -199,9 +213,7 @@ export const registerOnboardingJourneyCommand = (
         const discoveredJourneyEvents = discoveredEventNames.filter(
           (eventName) =>
             eventName.startsWith('paywall:') ||
-            eventName.startsWith('subscription:') ||
-            eventName === 'purchase:success' ||
-            eventName === 'paywall:dismissed',
+            eventName.startsWith('purchase:'),
         );
 
         const eventCandidates = [...new Set([
@@ -223,56 +235,23 @@ export const registerOnboardingJourneyCommand = (
           }),
         );
 
-        const paywallAnchorByStart =
-          startToPaywallShown.totalConverted >= startToPaywallEntry.totalConverted
-            ? {
-                eventName: PAYWALL_ANCHOR_EVENTS[0],
-                users: startToPaywallShown.totalConverted,
-              }
-            : {
-                eventName: PAYWALL_ANCHOR_EVENTS[1],
-                users: startToPaywallEntry.totalConverted,
-              };
+        const [paywallAnchorByStart, bestSkipFromStart, bestPurchaseFromStart] = await Promise.all([
+          queryBestConversion(ONBOARDING_START_EVENT, PAYWALL_ANCHOR_EVENTS),
+          queryBestConversion(ONBOARDING_START_EVENT, PAYWALL_SKIP_EVENTS),
+          queryBestConversion(ONBOARDING_START_EVENT, PURCHASE_SUCCESS_EVENTS),
+        ]);
 
-        const [anchorToSkipPrimary, anchorToSkipFallback, anchorToPurchasePrimary, anchorToPurchaseFallback] =
-          await Promise.all([
-            queryConversion(paywallAnchorByStart.eventName, PAYWALL_SKIP_EVENTS[0]),
-            queryConversion(paywallAnchorByStart.eventName, PAYWALL_SKIP_EVENTS[1]),
-            queryConversion(paywallAnchorByStart.eventName, PURCHASE_SUCCESS_EVENTS[0]),
-            queryConversion(paywallAnchorByStart.eventName, PURCHASE_SUCCESS_EVENTS[1]),
-          ]);
+        const [bestSkipFromPaywall, bestPurchaseFromPaywall] = await Promise.all([
+          queryBestConversion(paywallAnchorByStart.eventName, PAYWALL_SKIP_EVENTS),
+          queryBestConversion(paywallAnchorByStart.eventName, PURCHASE_SUCCESS_EVENTS),
+        ]);
 
         const starters = completionFromStart.totalFrom;
-        const bestSkipFromStart = pickBetterAlias(
-          PAYWALL_SKIP_EVENTS[0],
-          startToSkipPrimary.totalConverted,
-          PAYWALL_SKIP_EVENTS[1],
-          startToSkipFallback.totalConverted,
-        );
-        const bestPurchaseFromStart = pickBetterAlias(
-          PURCHASE_SUCCESS_EVENTS[0],
-          startToPurchasePrimary.totalConverted,
-          PURCHASE_SUCCESS_EVENTS[1],
-          startToPurchaseFallback.totalConverted,
-        );
-        const bestSkipFromPaywall = pickBetterAlias(
-          PAYWALL_SKIP_EVENTS[0],
-          anchorToSkipPrimary.totalConverted,
-          PAYWALL_SKIP_EVENTS[1],
-          anchorToSkipFallback.totalConverted,
-        );
-        const bestPurchaseFromPaywall = pickBetterAlias(
-          PURCHASE_SUCCESS_EVENTS[0],
-          anchorToPurchasePrimary.totalConverted,
-          PURCHASE_SUCCESS_EVENTS[1],
-          anchorToPurchaseFallback.totalConverted,
-        );
         const paywallExposedUsers =
-          anchorToSkipPrimary.totalFrom ||
-          anchorToSkipFallback.totalFrom ||
-          anchorToPurchasePrimary.totalFrom ||
-          anchorToPurchaseFallback.totalFrom ||
-          paywallAnchorByStart.users;
+          bestSkipFromPaywall.totalFrom ||
+          bestPurchaseFromPaywall.totalFrom ||
+          paywallAnchorByStart.totalFrom ||
+          paywallAnchorByStart.count;
 
         let trends: {
           starters: ReturnType<typeof computeTrendFromTimeseriesPoints>;
@@ -286,27 +265,14 @@ export const registerOnboardingJourneyCommand = (
           const [
             startersSeries,
             completionSeries,
-            paywallShownSeries,
-            paywallEntrySeries,
-            purchasePrimarySeries,
-            purchaseFallbackSeries,
+            selectedPaywallSeries,
+            selectedPurchaseSeries,
           ] = await Promise.all([
             queryUniqueUserSeries(ONBOARDING_START_EVENT),
             queryUniqueUserSeries('onboarding:complete'),
-            queryUniqueUserSeries(PAYWALL_ANCHOR_EVENTS[0]),
-            queryUniqueUserSeries(PAYWALL_ANCHOR_EVENTS[1]),
-            queryUniqueUserSeries(PURCHASE_SUCCESS_EVENTS[0]),
-            queryUniqueUserSeries(PURCHASE_SUCCESS_EVENTS[1]),
+            queryUniqueUserSeries(paywallAnchorByStart.eventName),
+            queryUniqueUserSeries(bestPurchaseFromStart.eventName),
           ]);
-
-          const selectedPaywallSeries =
-            paywallAnchorByStart.eventName === PAYWALL_ANCHOR_EVENTS[0]
-              ? paywallShownSeries
-              : paywallEntrySeries;
-          const selectedPurchaseSeries =
-            bestPurchaseFromStart.eventName === PURCHASE_SUCCESS_EVENTS[0]
-              ? purchasePrimarySeries
-              : purchaseFallbackSeries;
 
           const completionByTs = new Map(completionSeries.map((point) => [point.ts, point.value] as const));
           const dropOffSeries = startersSeries.map((point) => ({
@@ -358,8 +324,8 @@ export const registerOnboardingJourneyCommand = (
           completedUsers: completionFromStart.totalConverted,
           completionRate: toPercent(completionFromStart.totalConverted, starters),
           paywallAnchorEvent: paywallAnchorByStart.eventName,
-          paywallReachedUsers: paywallAnchorByStart.users,
-          paywallReachedRate: toPercent(paywallAnchorByStart.users, starters),
+          paywallReachedUsers: paywallAnchorByStart.count,
+          paywallReachedRate: toPercent(paywallAnchorByStart.count, starters),
           paywallSkippedUsers: bestSkipFromStart.count,
           paywallSkipEvent: bestSkipFromStart.eventName,
           paywallSkipRateFromStart: toPercent(bestSkipFromStart.count, starters),
