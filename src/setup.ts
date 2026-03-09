@@ -1,8 +1,9 @@
 import {
-  OPENCLAW_SKILL_PAGE_URL,
-  SKILL_ID,
+  CLAWHUB_SITE_URL,
+  PRODINFOS_AGENT_SKILL_NAMES,
   SKILL_SYNC_INTERVAL_MS,
   SKILL_SYNC_TIMEOUT_MS,
+  SKILLS_PUBLIC_REPO_SLUG,
 } from './constants.js';
 import { configPath, persistAuthToken, readConfig, resolveAuthToken, writeConfigValue } from './config-store.js';
 import { exchangeClerkJwtForReadonlyToken } from './http.js';
@@ -16,6 +17,57 @@ import type {
   SkillInstallResult,
   SkillInstallTarget,
 } from './types.js';
+
+const formatCommand = (command: string, args: string[]) => `\`${[command, ...args].join(' ')}\``;
+
+const getClawHubInvoker = (): { command: string; prefix: string[] } | null => {
+  if (isCommandAvailable('clawhub')) {
+    return { command: 'clawhub', prefix: [] };
+  }
+
+  if (isCommandAvailable('npx')) {
+    return { command: 'npx', prefix: ['-y', 'clawhub'] };
+  }
+
+  return null;
+};
+
+const runCodexClaudeSkillInstall = (skillName: string, timeoutMs = 120_000) =>
+  runCommand('npx', ['-y', 'skills', 'add', SKILLS_PUBLIC_REPO_SLUG, '--skill', skillName], {
+    timeoutMs,
+  });
+
+const runClawHubCommand = (args: string[], timeoutMs: number) => {
+  const invoker = getClawHubInvoker();
+  if (!invoker) {
+    return null;
+  }
+
+  return runCommand(invoker.command, [...invoker.prefix, ...args], { timeoutMs });
+};
+
+const summarizeRuns = (
+  runs: Array<{ name: string; ok: boolean; timedOut: boolean; stderr: string; code: number | null }>,
+  successDetail: string,
+): string => {
+  if (runs.every((run) => run.ok)) {
+    return successDetail;
+  }
+
+  return runs
+    .map((run) => {
+      if (run.ok) {
+        return `${run.name}: ok`;
+      }
+
+      if (run.timedOut) {
+        return `${run.name}: timed out`;
+      }
+
+      return `${run.name}: ${run.stderr.trim() || `exit code ${run.code ?? 'unknown'}`}`;
+    })
+    .join('; ');
+};
 
 export const parseSetupAgents = (value: string): SetupAgent[] => {
   const normalized = value
@@ -57,39 +109,58 @@ export const installAgentSkills = (agents: SetupAgent[]): SkillInstallResult[] =
         detail: '`npx` not available on this machine.',
       });
     } else {
-      const install = runCommand('npx', ['-y', 'skills', 'add', SKILL_ID], { timeoutMs: 120_000 });
+      const installs = PRODINFOS_AGENT_SKILL_NAMES.map((skillName) => {
+        const install = runCodexClaudeSkillInstall(skillName);
+        return {
+          name: skillName,
+          ok: install.ok,
+          timedOut: install.timedOut,
+          stderr: install.stderr,
+          code: install.code,
+        };
+      });
       results.push({
         target: 'codex_claude',
-        ok: install.ok,
+        ok: installs.every((install) => install.ok),
         skipped: false,
-        detail: install.ok
-          ? 'Skill installed/updated with `npx skills add prodinfos`.'
-          : install.timedOut
-            ? 'Skill install timed out.'
-            : install.stderr.trim() || `Exit code ${install.code ?? 'unknown'}.`,
+        detail: summarizeRuns(
+          installs,
+          `Skills installed/updated from ${formatCommand('npx', ['-y', 'skills', 'add', SKILLS_PUBLIC_REPO_SLUG, '--skill', 'prodinfos-cli'])} and the matching \`prodinfos-ts-sdk\` command.`,
+        ),
       });
     }
   }
 
   if (agents.includes('openclaw')) {
-    if (!isCommandAvailable('openclaw')) {
+    const invoker = getClawHubInvoker();
+    if (!invoker) {
       results.push({
         target: 'openclaw',
         ok: false,
         skipped: true,
-        detail: `\`openclaw\` not found. Install OpenClaw first or use ${OPENCLAW_SKILL_PAGE_URL}.`,
+        detail: `Neither \`clawhub\` nor \`npx\` is available. Install ClawHub first or use ${CLAWHUB_SITE_URL}.`,
       });
     } else {
-      const install = runCommand('openclaw', ['skill', 'add', SKILL_ID], { timeoutMs: 120_000 });
+      const installs = PRODINFOS_AGENT_SKILL_NAMES.map((skillName) => {
+        const install = runCommand(invoker.command, [...invoker.prefix, 'install', skillName], {
+          timeoutMs: 120_000,
+        });
+        return {
+          name: skillName,
+          ok: install.ok,
+          timedOut: install.timedOut,
+          stderr: install.stderr,
+          code: install.code,
+        };
+      });
       results.push({
         target: 'openclaw',
-        ok: install.ok,
+        ok: installs.every((install) => install.ok),
         skipped: false,
-        detail: install.ok
-          ? 'Skill installed/updated with `openclaw skill add prodinfos`.'
-          : install.timedOut
-            ? 'Skill install timed out.'
-            : install.stderr.trim() || `Exit code ${install.code ?? 'unknown'}.`,
+        detail: summarizeRuns(
+          installs,
+          `Skills installed/updated via ${formatCommand(invoker.command, [...invoker.prefix, 'install', 'prodinfos-cli'])} and the matching \`prodinfos-ts-sdk\` command.`,
+        ),
       });
     }
   }
@@ -137,6 +208,14 @@ export const runSetupFlow = async (
         tokenStorage: persisted.storage,
         tenantId: exchanged.tenantId,
         projectIds: exchanged.projectIds,
+      };
+    } else if (root.token?.trim()) {
+      const persisted = await persistAuthToken(activeConfig, apiUrl, root.token.trim());
+      activeConfig = persisted.config;
+      loginResult = {
+        ok: true,
+        mode: 'existing_token',
+        tokenStorage: persisted.storage,
       };
     } else if (resolveAuthToken(activeConfig, root.token)) {
       loginResult = {
@@ -258,15 +337,13 @@ export const maybeAutoRefreshSkills = async (commandPath: string): Promise<void>
   }
 
   if (isCommandAvailable('npx')) {
-    runCommand('npx', ['-y', 'skills', 'add', SKILL_ID], {
-      timeoutMs: SKILL_SYNC_TIMEOUT_MS,
-    });
+    for (const skillName of PRODINFOS_AGENT_SKILL_NAMES) {
+      runCodexClaudeSkillInstall(skillName, SKILL_SYNC_TIMEOUT_MS);
+    }
   }
 
-  if (isCommandAvailable('openclaw')) {
-    runCommand('openclaw', ['skill', 'add', SKILL_ID], {
-      timeoutMs: SKILL_SYNC_TIMEOUT_MS,
-    });
+  for (const skillName of PRODINFOS_AGENT_SKILL_NAMES) {
+    runClawHubCommand(['update', skillName], SKILL_SYNC_TIMEOUT_MS);
   }
 
   await writeConfigValue({

@@ -1,4 +1,4 @@
-import { readCliEnv } from '@prodinfos/config';
+import { readCliEnv } from '../../../packages/config/src/index.js';
 import {
   ONBOARDING_EVENTS,
   ONBOARDING_PROGRESS_EVENT_ORDER,
@@ -7,15 +7,19 @@ import {
   PAYWALL_JOURNEY_EVENT_ORDER as SHARED_PAYWALL_JOURNEY_EVENT_ORDER,
   PAYWALL_SKIP_EVENT_CANDIDATES,
   PURCHASE_SUCCESS_EVENT_CANDIDATES,
-} from '@prodinfos/shared';
+} from '../../../packages/shared/src/index.js';
 
 export const env = readCliEnv();
+export const CLI_WRITE_COMMANDS_ENABLED = env.PRODINFOS_CLI_ENABLE_WRITE_COMMANDS;
+export const CLI_DEV_COMMANDS_ENABLED = env.PRODINFOS_CLI_ENABLE_DEV_COMMANDS;
 
 export const CLI_VERSION = '0.1.0';
-export const SKILL_ID = 'prodinfos';
 export const SKILL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const SKILL_SYNC_TIMEOUT_MS = 4000;
-export const OPENCLAW_SKILL_PAGE_URL = 'https://clawhub.ai/skills/prodinfos';
+export const SKILLS_PUBLIC_REPO_SLUG = 'wotaso/prodinfos-skills';
+export const SKILLS_PUBLIC_REPO_URL = `https://github.com/${SKILLS_PUBLIC_REPO_SLUG}`;
+export const PRODINFOS_AGENT_SKILL_NAMES = ['prodinfos-cli', 'prodinfos-ts-sdk'] as const;
+export const CLAWHUB_SITE_URL = 'https://clawhub.com';
 export const KEYCHAIN_SERVICE = 'com.prodinfos.cli.token';
 export const KEYCHAIN_ACCOUNT = process.env.USER ?? process.env.USERNAME ?? 'default';
 export const SELF_TRACKING_ENDPOINT = env.PRODINFOS_SELF_TRACKING_ENDPOINT?.replace(/\/$/, '');

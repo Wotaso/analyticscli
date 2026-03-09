@@ -8,6 +8,7 @@ import { registerFeedbackCommands } from './commands/feedback.js';
 import { registerProjectCommands } from './commands/projects.js';
 import { registerQueryCommands } from './commands/queries/index.js';
 import {
+  CLI_DEV_COMMANDS_ENABLED,
   CLI_ANON_ID,
   CLI_SESSION_ID,
   CLI_VERSION,
@@ -142,7 +143,9 @@ registerProjectCommands(context);
 registerQueryCommands(context);
 registerFeedbackCommands(context);
 registerEventCommands(context);
-registerDevCommands(context);
+if (CLI_DEV_COMMANDS_ENABLED) {
+  registerDevCommands(context);
+}
 
 program.parseAsync(process.argv).catch((error) => {
   const typed = error as Error;

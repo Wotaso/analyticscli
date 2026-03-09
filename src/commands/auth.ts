@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { print } from '../analytics-utils.js';
 import { configPath, persistAuthToken, readConfig, resolveAuthToken } from '../config-store.js';
-import { OPENCLAW_SKILL_PAGE_URL } from '../constants.js';
+import { CLAWHUB_SITE_URL } from '../constants.js';
 import { exchangeClerkJwtForReadonlyToken } from '../http.js';
 import { isCommandAvailable, openExternalUrl } from '../shell.js';
 import {
@@ -20,21 +20,42 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
 
   program
     .command('login')
-    .description('Exchange Clerk JWT for a readonly token and store it')
+    .description('Store a readonly token directly, or exchange a Clerk JWT')
     .option('--clerk-jwt <jwt>', 'Clerk JWT to exchange')
-    .action(async (options: { clerkJwt?: string }) => {
+    .option('--readonly-token <token>', 'Readonly token to store directly')
+    .action(async (options: { clerkJwt?: string; readonlyToken?: string }) => {
       await withErrorHandling(async () => {
         const root = getRootOptions();
         const config = await readConfig();
         const apiUrl = (root.apiUrl ?? config.apiUrl).replace(/\/$/, '');
 
-        if (!options.clerkJwt) {
-          throw Object.assign(new Error('Provide --clerk-jwt'), { exitCode: 2 });
+        const directToken = options.readonlyToken?.trim() ?? root.token?.trim();
+        const clerkJwt = options.clerkJwt?.trim();
+
+        if (directToken && clerkJwt) {
+          throw Object.assign(new Error('Use either --readonly-token/--token or --clerk-jwt, not both.'), {
+            exitCode: 2,
+          });
+        }
+
+        if (!directToken && !clerkJwt) {
+          throw Object.assign(new Error('Provide --readonly-token/--token or --clerk-jwt'), { exitCode: 2 });
         }
 
         const now = new Date().toISOString();
+        if (directToken) {
+          const persisted = await persistAuthToken(config, apiUrl, directToken);
+          print(root.format, {
+            ok: true,
+            mode: 'direct_token',
+            tokenStorage: persisted.storage,
+            configPath,
+            updatedAt: now,
+          });
+          return;
+        }
 
-        const exchanged = await exchangeClerkJwtForReadonlyToken(apiUrl, String(options.clerkJwt));
+        const exchanged = await exchangeClerkJwtForReadonlyToken(apiUrl, String(clerkJwt));
         const persisted = await persistAuthToken(config, apiUrl, exchanged.token);
 
         print(root.format, {
@@ -123,7 +144,7 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
 
             const installCodexClaude = await promptYesNo(
               rl,
-              'Install skill for Codex/Claude Code via `npx -y skills add prodinfos`?',
+              'Install Prodinfos skills for Codex/Claude Code from `wotaso/prodinfos-skills`?',
               true,
             );
             if (installCodexClaude) {
@@ -132,27 +153,27 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
 
             const installOpenclaw = await promptYesNo(
               rl,
-              'Install skill for OpenClaw via `openclaw skill add prodinfos`?',
+              'Install Prodinfos skills for OpenClaw via ClawHub?',
               false,
             );
             if (installOpenclaw) {
               selectedAgents.push('openclaw');
-              if (!isCommandAvailable('openclaw')) {
-                process.stdout.write('\n`openclaw` is not installed on this machine.\n');
+              if (!isCommandAvailable('clawhub') && !isCommandAvailable('npx')) {
+                process.stdout.write('\nNeither `clawhub` nor `npx` is installed on this machine.\n');
                 const openSkillPage = await promptYesNo(
                   rl,
-                  `Open OpenClaw skill page now (${OPENCLAW_SKILL_PAGE_URL})?`,
+                  `Open ClawHub now (${CLAWHUB_SITE_URL})?`,
                   true,
                 );
                 if (openSkillPage) {
-                  const openResult = openExternalUrl(OPENCLAW_SKILL_PAGE_URL);
+                  const openResult = openExternalUrl(CLAWHUB_SITE_URL);
                   if (!openResult) {
                     process.stdout.write(
-                      `Could not auto-open browser. Open this URL manually: ${OPENCLAW_SKILL_PAGE_URL}\n`,
+                      `Could not auto-open browser. Open this URL manually: ${CLAWHUB_SITE_URL}\n`,
                     );
                   } else if (!openResult.ok) {
                     process.stdout.write(
-                      `Failed to open browser automatically. Open this URL manually: ${OPENCLAW_SKILL_PAGE_URL}\n`,
+                      `Failed to open browser automatically. Open this URL manually: ${CLAWHUB_SITE_URL}\n`,
                     );
                   }
                 }

@@ -33,17 +33,8 @@ export const requestApi = async (
   });
 
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-
   if (!response.ok) {
-    const message =
-      typeof data?.error === 'object' && data.error && 'message' in data.error
-        ? String((data.error as { message: unknown }).message)
-        : `Request failed with status ${response.status}`;
-
-    const error = new Error(message) as Error & { exitCode?: number; payload?: unknown };
-    error.exitCode = mapStatusToExitCode(response.status);
-    error.payload = data;
-    throw error;
+    throw createResponseError(response.status, data);
   }
 
   return data;
@@ -66,15 +57,7 @@ export const requestCsvExport = async (
 
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    const message =
-      typeof data?.error === 'object' && data.error && 'message' in data.error
-        ? String((data.error as { message: unknown }).message)
-        : `Request failed with status ${response.status}`;
-
-    const error = new Error(message) as Error & { exitCode?: number; payload?: unknown };
-    error.exitCode = mapStatusToExitCode(response.status);
-    error.payload = data;
-    throw error;
+    throw createResponseError(response.status, data);
   }
 
   const csv = await response.text();
@@ -82,6 +65,41 @@ export const requestCsvExport = async (
   const filenameMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
   const filename = filenameMatch?.[1] ?? 'prodinfos-events-export.csv';
   return { csv, filename };
+};
+
+export const requestFileDownload = async (
+  path: string,
+  options: ClientOptions,
+): Promise<{ body: ReadableStream<Uint8Array>; filename: string }> => {
+  const config = await readConfig();
+  const apiUrl = (options.apiUrl ?? config.apiUrl).replace(/\/$/, '');
+  const token = resolveAuthToken(config, options.token);
+
+  const response = await fetch(`${apiUrl}${path}`, {
+    method: 'GET',
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    throw createResponseError(response.status, data);
+  }
+
+  if (!response.body) {
+    throw Object.assign(new Error('Download response did not include a body'), {
+      exitCode: 4,
+    });
+  }
+
+  const contentDisposition = response.headers.get('content-disposition') ?? '';
+  const filenameMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = filenameMatch?.[1] ?? 'prodinfos-events-export.csv';
+  return {
+    body: response.body,
+    filename,
+  };
 };
 
 export const requestCollect = async (
@@ -101,15 +119,7 @@ export const requestCollect = async (
 
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
-    const message =
-      typeof data?.error === 'object' && data.error && 'message' in data.error
-        ? String((data.error as { message: unknown }).message)
-        : `Request failed with status ${response.status}`;
-
-    const error = new Error(message) as Error & { exitCode?: number; payload?: unknown };
-    error.exitCode = mapStatusToExitCode(response.status);
-    error.payload = data;
-    throw error;
+    throw createResponseError(response.status, data);
   }
 
   return data;
@@ -144,4 +154,19 @@ export const exchangeClerkJwtForReadonlyToken = async (
     tenantId: payload.tenantId,
     projectIds: payload.projectIds,
   };
+};
+
+const createResponseError = (
+  status: number,
+  payload: Record<string, unknown>,
+): Error & { exitCode?: number; payload?: unknown } => {
+  const message =
+    typeof payload?.error === 'object' && payload.error && 'message' in payload.error
+      ? String((payload.error as { message: unknown }).message)
+      : `Request failed with status ${status}`;
+
+  const error = new Error(message) as Error & { exitCode?: number; payload?: unknown };
+  error.exitCode = mapStatusToExitCode(status);
+  error.payload = payload;
+  return error;
 };

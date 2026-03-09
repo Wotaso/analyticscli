@@ -1,4 +1,5 @@
 import { print } from '../analytics-utils.js';
+import { CLI_WRITE_COMMANDS_ENABLED } from '../constants.js';
 import { persistAuthToken, readConfig } from '../config-store.js';
 import { requestApi } from '../http.js';
 import type { CliCommandContext } from './context.js';
@@ -22,58 +23,60 @@ export const registerProjectCommands = (context: CliCommandContext): void => {
       });
     });
 
-  projects
-    .command('create')
-    .description('Create a new project in your tenant')
-    .requiredOption('--name <name>', 'Project name')
-    .requiredOption('--slug <slug>', 'Project slug')
-    .action(async (options: { name: string; slug: string }) => {
-      await withErrorHandling(async () => {
-        const root = getRootOptions();
-        const payload = await requestApi(
-          'POST',
-          '/v1/projects',
-          {
-            name: options.name,
-            slug: options.slug,
-          },
-          {
-            apiUrl: root.apiUrl,
-            token: root.token,
-          },
-        );
+  if (CLI_WRITE_COMMANDS_ENABLED) {
+    projects
+      .command('create')
+      .description('Create a new project in your tenant')
+      .requiredOption('--name <name>', 'Project name')
+      .requiredOption('--slug <slug>', 'Project slug')
+      .action(async (options: { name: string; slug: string }) => {
+        await withErrorHandling(async () => {
+          const root = getRootOptions();
+          const payload = await requestApi(
+            'POST',
+            '/v1/projects',
+            {
+              name: options.name,
+              slug: options.slug,
+            },
+            {
+              apiUrl: root.apiUrl,
+              token: root.token,
+            },
+          );
 
-        const token = (payload as { token?: unknown }).token;
-        if (typeof token === 'string') {
-          const current = await readConfig();
-          await persistAuthToken(current, (root.apiUrl ?? current.apiUrl).replace(/\/$/, ''), token);
-        }
+          const token = (payload as { token?: unknown }).token;
+          if (typeof token === 'string') {
+            const current = await readConfig();
+            await persistAuthToken(current, (root.apiUrl ?? current.apiUrl).replace(/\/$/, ''), token);
+          }
 
-        print(root.format, payload);
+          print(root.format, payload);
+        });
       });
-    });
 
-  const keys = program.command('keys').description('Project public API key helpers');
+    const keys = program.command('keys').description('Project public API key helpers');
 
-  keys
-    .command('list')
-    .description('Show the project public API key metadata')
-    .requiredOption('--project <id>', 'Project ID')
-    .action(async (options: { project: string }) => {
-      await withErrorHandling(async () => {
-        const root = getRootOptions();
-        const payload = await requestApi(
-          'GET',
-          `/v1/projects/${encodeURIComponent(options.project)}/api-keys`,
-          undefined,
-          {
-            apiUrl: root.apiUrl,
-            token: root.token,
-          },
-        );
-        print(root.format, payload);
+    keys
+      .command('list')
+      .description('Show the project public API key metadata')
+      .requiredOption('--project <id>', 'Project ID')
+      .action(async (options: { project: string }) => {
+        await withErrorHandling(async () => {
+          const root = getRootOptions();
+          const payload = await requestApi(
+            'GET',
+            `/v1/projects/${encodeURIComponent(options.project)}/api-keys`,
+            undefined,
+            {
+              apiUrl: root.apiUrl,
+              token: root.token,
+            },
+          );
+          print(root.format, payload);
+        });
       });
-    });
+  }
 
   const schema = program.command('schema').description('Data schema helpers');
 
@@ -82,13 +85,15 @@ export const registerProjectCommands = (context: CliCommandContext): void => {
     .description('List discovered events and known properties')
     .requiredOption('--project <id>', 'Project ID')
     .option('--limit <n>', 'Result limit', '100')
-    .action(async (options: { project: string; limit: string }) => {
+    .option('--last <duration>', 'Time range like 14d', '14d')
+    .action(async (options: { project: string; limit: string; last: string }) => {
       await withErrorHandling(async () => {
         const root = getRootOptions();
         const limit = Number(options.limit);
         const qs = new URLSearchParams({
           projectId: options.project,
           limit: String(limit),
+          last: options.last,
           includeDebug: String(includeDebugFlag()),
         });
 

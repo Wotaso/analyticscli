@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapStatusToExitCode, requestCollect } from '../src/http.js';
+import { mapStatusToExitCode, requestCollect, requestFileDownload } from '../src/http.js';
 
 test('mapStatusToExitCode maps auth/client/server failures to expected exit codes', () => {
   assert.equal(mapStatusToExitCode(401), 3);
@@ -87,6 +87,31 @@ test('requestCollect handles non-JSON error responses gracefully', async () => {
         return true;
       },
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('requestFileDownload returns filename and body stream for successful downloads', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    return new Response('csv-content\n', {
+      status: 200,
+      headers: {
+        'content-disposition': 'attachment; filename="historical-export.csv"',
+      },
+    });
+  }) as typeof globalThis.fetch;
+
+  try {
+    const result = await requestFileDownload('/v1/export/jobs/events/job-1/download', {
+      apiUrl: 'https://api.prodinfos.com',
+      token: 'token',
+    });
+
+    const text = await new Response(result.body).text();
+    assert.equal(result.filename, 'historical-export.csv');
+    assert.equal(text, 'csv-content\n');
   } finally {
     globalThis.fetch = originalFetch;
   }

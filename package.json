@@ -8,6 +8,9 @@
   "bin": {
     "prodinfos": "dist/apps/cli/src/index.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
@@ -19,9 +22,8 @@
     "quality": "pnpm test:coverage:gate"
   },
   "dependencies": {
-    "@prodinfos/config": "workspace:*",
-    "@prodinfos/shared": "workspace:*",
-    "commander": "^13.1.0"
+    "commander": "^13.1.0",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "tsx": "^4.19.3"
