@@ -15,7 +15,6 @@ import type {
   SetupExecutionResult,
   SetupLoginResult,
   SkillInstallResult,
-  SkillInstallTarget,
 } from './types.js';
 
 const formatCommand = (command: string, args: string[]) => `\`${[command, ...args].join(' ')}\``;
