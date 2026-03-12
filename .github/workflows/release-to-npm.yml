@@ -1,0 +1,90 @@
+name: Release to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      PACKAGE_NAME: '@prodinfos/cli'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.5.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Resolve version/tag metadata
+        id: meta
+        run: |
+          set -euo pipefail
+
+          version="$(node -e "console.log(JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version)")"
+          release_tag="v${version}"
+          dist_tag="latest"
+          if [[ "${version}" == *-* ]]; then
+            dist_tag="preview"
+          fi
+
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            pushed_tag="${GITHUB_REF#refs/tags/}"
+            if [[ "${pushed_tag}" != "${release_tag}" ]]; then
+              echo "::error::Tag/version mismatch. package.json has ${release_tag} but pushed tag is ${pushed_tag}."
+              exit 1
+            fi
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=${dist_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Run quality checks
+        run: pnpm quality
+
+      - name: Build package
+        run: pnpm build
+
+      - name: Check if version already exists on npm
+        id: npm-check
+        run: |
+          set -euo pipefail
+          if npm view "${PACKAGE_NAME}@${{ steps.meta.outputs.version }}" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "Version ${{ steps.meta.outputs.version }} already published to npm; skipping publish."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: ${{ steps.npm-check.outputs.published == 'false' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pnpm publish --access public --tag "${{ steps.meta.outputs.dist_tag }}" --no-git-checks
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          generate_release_notes: true
+          make_latest: ${{ steps.meta.outputs.dist_tag == 'latest' }}
+          prerelease: ${{ steps.meta.outputs.dist_tag == 'preview' }}

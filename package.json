@@ -1,12 +1,14 @@
 {
   "name": "@prodinfos/cli",
   "version": "0.1.1",
+  "description": "Agent-friendly CLI for Prodinfos analytics queries, exports, feedback and event ingestion.",
+  "license": "MIT",
   "type": "module",
   "files": [
     "dist"
   ],
   "bin": {
-    "prodinfos": "dist/apps/cli/src/index.js"
+    "prodinfos": "dist/index.js"
   },
   "publishConfig": {
     "access": "public"
@@ -18,14 +20,19 @@
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src --ext .ts",
     "test": "tsx --test tests/**/*.test.ts",
     "test:coverage": "node --experimental-test-coverage --import tsx --test tests/**/*.test.ts",
-    "test:coverage:gate": "node ../../scripts/coverage-gate.mjs cli",
-    "quality": "pnpm test:coverage:gate"
+    "test:coverage:gate": "node scripts/coverage-gate.mjs",
+    "quality": "npm run lint && npm run typecheck && npm run test:coverage:gate"
   },
   "dependencies": {
     "commander": "^13.1.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "tsx": "^4.19.3"
+    "@types/node": "^22.13.10",
+    "@typescript-eslint/eslint-plugin": "^8.26.0",
+    "@typescript-eslint/parser": "^8.26.0",
+    "eslint": "^9.22.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
   }
 }

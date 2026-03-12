@@ -1,4 +1,4 @@
-import { readCliEnv } from '../../../packages/config/src/index.js';
+import { readCliEnv } from './env.js';
 import {
   ONBOARDING_EVENTS,
   ONBOARDING_PROGRESS_EVENT_ORDER,
@@ -7,13 +7,13 @@ import {
   PAYWALL_JOURNEY_EVENT_ORDER as SHARED_PAYWALL_JOURNEY_EVENT_ORDER,
   PAYWALL_SKIP_EVENT_CANDIDATES,
   PURCHASE_SUCCESS_EVENT_CANDIDATES,
-} from '../../../packages/shared/src/index.js';
+} from './shared-contract.js';
 
 export const env = readCliEnv();
 export const CLI_WRITE_COMMANDS_ENABLED = env.PRODINFOS_CLI_ENABLE_WRITE_COMMANDS;
 export const CLI_DEV_COMMANDS_ENABLED = env.PRODINFOS_CLI_ENABLE_DEV_COMMANDS;
 
-export const CLI_VERSION = '0.1.0';
+export const CLI_VERSION = '0.1.1';
 export const SKILL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const SKILL_SYNC_TIMEOUT_MS = 4000;
 export const SKILLS_PUBLIC_REPO_SLUG = 'wotaso/prodinfos-skills';
