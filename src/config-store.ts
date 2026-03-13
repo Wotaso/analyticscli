@@ -6,11 +6,11 @@ import { runCommand } from './shell.js';
 import type { CliConfig } from './types.js';
 
 const resolveConfigPath = (): string => {
-  if (env.PRODINFOS_CONFIG_DIR) {
-    return join(env.PRODINFOS_CONFIG_DIR, 'config.json');
+  if (env.ANALYTICSCLI_CONFIG_DIR) {
+    return join(env.ANALYTICSCLI_CONFIG_DIR, 'config.json');
   }
 
-  return join(homedir(), '.config', 'prodinfos', 'config.json');
+  return join(homedir(), '.config', 'analyticscli', 'config.json');
 };
 
 export const configPath = resolveConfigPath();
@@ -20,7 +20,7 @@ export const readConfig = async (): Promise<CliConfig> => {
     const raw = await readFile(configPath, 'utf8');
     const parsed = JSON.parse(raw) as Partial<CliConfig>;
     return {
-      apiUrl: typeof parsed.apiUrl === 'string' ? parsed.apiUrl : env.PRODINFOS_API_URL,
+      apiUrl: typeof parsed.apiUrl === 'string' ? parsed.apiUrl : env.ANALYTICSCLI_API_URL,
       token: typeof parsed.token === 'string' ? parsed.token : undefined,
       tokenStorage:
         parsed.tokenStorage === 'system_keychain' || parsed.tokenStorage === 'config_file'
@@ -33,7 +33,7 @@ export const readConfig = async (): Promise<CliConfig> => {
     };
   } catch {
     return {
-      apiUrl: env.PRODINFOS_API_URL,
+      apiUrl: env.ANALYTICSCLI_API_URL,
       skillAutoUpdate: false,
       updatedAt: new Date().toISOString(),
     };
@@ -98,7 +98,7 @@ const writeTokenToSystemStore = (token: string): boolean => {
   if (process.platform === 'linux') {
     const result = runCommand(
       'secret-tool',
-      ['store', '--label', 'Prodinfos CLI token', 'service', KEYCHAIN_SERVICE, 'account', KEYCHAIN_ACCOUNT],
+      ['store', '--label', 'AnalyticsCLI CLI token', 'service', KEYCHAIN_SERVICE, 'account', KEYCHAIN_ACCOUNT],
       { input: token, timeoutMs: 5000 },
     );
     return result.ok;

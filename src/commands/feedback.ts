@@ -11,15 +11,15 @@ export const registerFeedbackCommands = (context: CliCommandContext): void => {
   if (CLI_WRITE_COMMANDS_ENABLED) {
     feedback
       .command('submit')
-      .description('Submit product feedback for Prodinfos')
+      .description('Submit product feedback for AnalyticsCLI')
       .requiredOption('--message <text>', 'Feedback message')
       .option('--rating <n>', 'Optional rating 1-5')
       .option('--category <type>', 'bug|feature|ux|performance|other', 'other')
       .option('--context <text>', 'Optional context, e.g. what failed')
       .option('--meta <json>', 'Optional JSON object with additional fields')
-      .option('--endpoint <url>', 'Collector endpoint (defaults to PRODINFOS_SELF_TRACKING_ENDPOINT)')
-      .option('--project <id>', 'Project ID for feedback events (defaults to PRODINFOS_SELF_TRACKING_PROJECT_ID)')
-      .option('--api-key <key>', 'Write key for feedback events (defaults to PRODINFOS_SELF_TRACKING_API_KEY)')
+      .option('--endpoint <url>', 'Collector endpoint (defaults to ANALYTICSCLI_SELF_TRACKING_ENDPOINT)')
+      .option('--project <id>', 'Project ID for feedback events (defaults to ANALYTICSCLI_SELF_TRACKING_PROJECT_ID)')
+      .option('--api-key <key>', 'Write key for feedback events (defaults to ANALYTICSCLI_SELF_TRACKING_API_KEY)')
       .action(
         async (options: {
           message: string;
@@ -33,12 +33,12 @@ export const registerFeedbackCommands = (context: CliCommandContext): void => {
         }) => {
           await withErrorHandling(async () => {
             const root = getRootOptions();
-            const endpoint = String(options.endpoint ?? env.PRODINFOS_SELF_TRACKING_ENDPOINT ?? '').replace(
+            const endpoint = String(options.endpoint ?? env.ANALYTICSCLI_SELF_TRACKING_ENDPOINT ?? '').replace(
               /\/$/,
               '',
             );
-            const projectId = String(options.project ?? env.PRODINFOS_SELF_TRACKING_PROJECT_ID ?? '').trim();
-            const apiKey = String(options.apiKey ?? env.PRODINFOS_SELF_TRACKING_API_KEY ?? '').trim();
+            const projectId = String(options.project ?? env.ANALYTICSCLI_SELF_TRACKING_PROJECT_ID ?? '').trim();
+            const apiKey = String(options.apiKey ?? env.ANALYTICSCLI_SELF_TRACKING_API_KEY ?? '').trim();
 
             const category = String(options.category ?? 'other').toLowerCase();
             if (!['bug', 'feature', 'ux', 'performance', 'other'].includes(category)) {
@@ -102,7 +102,7 @@ export const registerFeedbackCommands = (context: CliCommandContext): void => {
                       source: 'cli',
                       meta,
                     },
-                    platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
+                    platform: env.ANALYTICSCLI_SELF_TRACKING_PLATFORM,
                     appVersion: CLI_VERSION,
                     type: 'feedback',
                   },

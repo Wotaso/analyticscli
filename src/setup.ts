@@ -1,6 +1,6 @@
 import {
   CLAWHUB_SITE_URL,
-  PRODINFOS_AGENT_SKILL_NAMES,
+  ANALYTICSCLI_AGENT_SKILL_NAMES,
   SKILL_SYNC_INTERVAL_MS,
   SKILL_SYNC_TIMEOUT_MS,
   SKILLS_PUBLIC_REPO_SLUG,
@@ -108,7 +108,7 @@ export const installAgentSkills = (agents: SetupAgent[]): SkillInstallResult[] =
         detail: '`npx` not available on this machine.',
       });
     } else {
-      const installs = PRODINFOS_AGENT_SKILL_NAMES.map((skillName) => {
+      const installs = ANALYTICSCLI_AGENT_SKILL_NAMES.map((skillName) => {
         const install = runCodexClaudeSkillInstall(skillName);
         return {
           name: skillName,
@@ -124,7 +124,7 @@ export const installAgentSkills = (agents: SetupAgent[]): SkillInstallResult[] =
         skipped: false,
         detail: summarizeRuns(
           installs,
-          `Skills installed/updated from ${formatCommand('npx', ['-y', 'skills', 'add', SKILLS_PUBLIC_REPO_SLUG, '--skill', 'prodinfos-cli'])} and the matching \`prodinfos-ts-sdk\` command.`,
+          `Skills installed/updated from ${formatCommand('npx', ['-y', 'skills', 'add', SKILLS_PUBLIC_REPO_SLUG, '--skill', 'analyticscli-cli'])} and the matching \`analyticscli-ts-sdk\` command.`,
         ),
       });
     }
@@ -140,7 +140,7 @@ export const installAgentSkills = (agents: SetupAgent[]): SkillInstallResult[] =
         detail: `Neither \`clawhub\` nor \`npx\` is available. Install ClawHub first or use ${CLAWHUB_SITE_URL}.`,
       });
     } else {
-      const installs = PRODINFOS_AGENT_SKILL_NAMES.map((skillName) => {
+      const installs = ANALYTICSCLI_AGENT_SKILL_NAMES.map((skillName) => {
         const install = runCommand(invoker.command, [...invoker.prefix, 'install', skillName], {
           timeoutMs: 120_000,
         });
@@ -158,7 +158,7 @@ export const installAgentSkills = (agents: SetupAgent[]): SkillInstallResult[] =
         skipped: false,
         detail: summarizeRuns(
           installs,
-          `Skills installed/updated via ${formatCommand(invoker.command, [...invoker.prefix, 'install', 'prodinfos-cli'])} and the matching \`prodinfos-ts-sdk\` command.`,
+          `Skills installed/updated via ${formatCommand(invoker.command, [...invoker.prefix, 'install', 'analyticscli-cli'])} and the matching \`analyticscli-ts-sdk\` command.`,
         ),
       });
     }
@@ -336,12 +336,12 @@ export const maybeAutoRefreshSkills = async (commandPath: string): Promise<void>
   }
 
   if (isCommandAvailable('npx')) {
-    for (const skillName of PRODINFOS_AGENT_SKILL_NAMES) {
+    for (const skillName of ANALYTICSCLI_AGENT_SKILL_NAMES) {
       runCodexClaudeSkillInstall(skillName, SKILL_SYNC_TIMEOUT_MS);
     }
   }
 
-  for (const skillName of PRODINFOS_AGENT_SKILL_NAMES) {
+  for (const skillName of ANALYTICSCLI_AGENT_SKILL_NAMES) {
     runClawHubCommand(['update', skillName], SKILL_SYNC_TIMEOUT_MS);
   }
 

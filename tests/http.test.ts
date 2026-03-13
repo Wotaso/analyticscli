@@ -29,12 +29,12 @@ test('requestCollect sends payload with x-api-key and returns JSON response', as
     };
 
     const result = await requestCollect('/v1/collect', payload, {
-      endpoint: 'https://collector.prodinfos.com',
+      endpoint: 'https://collector.analyticscli.com',
       apiKey: 'pi_write_key',
     });
 
     assert.deepEqual(result, { accepted: true });
-    assert.equal(String(calls[0]?.input), 'https://collector.prodinfos.com/v1/collect');
+    assert.equal(String(calls[0]?.input), 'https://collector.analyticscli.com/v1/collect');
     const headers = (calls[0]?.init?.headers ?? {}) as Record<string, string>;
     assert.equal(headers['x-api-key'], 'pi_write_key');
     assert.equal(headers['content-type'], 'application/json');
@@ -54,7 +54,7 @@ test('requestCollect throws typed error with exit code and payload on API failur
 
   try {
     await assert.rejects(
-      requestCollect('/v1/collect', { events: [] }, { endpoint: 'https://collector.prodinfos.com', apiKey: 'x' }),
+      requestCollect('/v1/collect', { events: [] }, { endpoint: 'https://collector.analyticscli.com', apiKey: 'x' }),
       (error: unknown) => {
         const typed = error as Error & { exitCode?: number; payload?: unknown };
         assert.equal(typed.message, 'Unauthorized');
@@ -79,7 +79,7 @@ test('requestCollect handles non-JSON error responses gracefully', async () => {
 
   try {
     await assert.rejects(
-      requestCollect('/v1/collect', { events: [] }, { endpoint: 'https://collector.prodinfos.com', apiKey: 'x' }),
+      requestCollect('/v1/collect', { events: [] }, { endpoint: 'https://collector.analyticscli.com', apiKey: 'x' }),
       (error: unknown) => {
         const typed = error as Error & { exitCode?: number };
         assert.match(typed.message, /Request failed with status 500/);
@@ -105,7 +105,7 @@ test('requestFileDownload returns filename and body stream for successful downlo
 
   try {
     const result = await requestFileDownload('/v1/export/jobs/events/job-1/download', {
-      apiUrl: 'https://api.prodinfos.com',
+      apiUrl: 'https://api.analyticscli.com',
       token: 'token',
     });
 

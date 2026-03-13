@@ -67,7 +67,7 @@ test('renderTimeseriesSvg supports empty data state', () => {
 });
 
 test('writeSvgToFile persists svg to disk', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'prodinfos-cli-render-'));
+  const dir = await mkdtemp(join(tmpdir(), 'analyticscli-cli-render-'));
   const file = join(dir, 'chart.svg');
   const expected = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
 

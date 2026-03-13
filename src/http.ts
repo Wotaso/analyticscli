@@ -63,7 +63,7 @@ export const requestCsvExport = async (
   const csv = await response.text();
   const contentDisposition = response.headers.get('content-disposition') ?? '';
   const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
-  const filename = filenameMatch?.[1] ?? 'prodinfos-events-export.csv';
+  const filename = filenameMatch?.[1] ?? 'analyticscli-events-export.csv';
   return { csv, filename };
 };
 
@@ -95,7 +95,7 @@ export const requestFileDownload = async (
 
   const contentDisposition = response.headers.get('content-disposition') ?? '';
   const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
-  const filename = filenameMatch?.[1] ?? 'prodinfos-events-export.csv';
+  const filename = filenameMatch?.[1] ?? 'analyticscli-events-export.csv';
   return {
     body: response.body,
     filename,

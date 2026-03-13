@@ -1,14 +1,14 @@
 {
-  "name": "@prodinfos/cli",
+  "name": "analyticscli",
   "version": "0.1.1",
-  "description": "Agent-friendly CLI for Prodinfos analytics queries, exports, feedback and event ingestion.",
+  "description": "Agent-friendly CLI for AnalyticsCLI analytics queries, exports, feedback and event ingestion.",
   "license": "MIT",
   "type": "module",
   "files": [
     "dist"
   ],
   "bin": {
-    "prodinfos": "dist/index.js"
+    "analyticscli": "dist/index.js"
   },
   "publishConfig": {
     "access": "public"

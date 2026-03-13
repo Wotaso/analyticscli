@@ -123,7 +123,7 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
           if (!process.stdin.isTTY || !process.stdout.isTTY) {
             throw Object.assign(
               new Error(
-                '`onboard` requires an interactive terminal. Use `prodinfos setup` for non-interactive flows.',
+                '`onboard` requires an interactive terminal. Use `analyticscli setup` for non-interactive flows.',
               ),
               { exitCode: 2 },
             );
@@ -139,12 +139,12 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
           });
 
           try {
-            process.stdout.write('Prodinfos onboarding\n');
+            process.stdout.write('AnalyticsCLI onboarding\n');
             process.stdout.write('This flow installs skills and configures login.\n\n');
 
             const installCodexClaude = await promptYesNo(
               rl,
-              'Install Prodinfos skills for Codex/Claude Code from `wotaso/prodinfos-skills`?',
+              'Install AnalyticsCLI skills for Codex/Claude Code from `wotaso/analyticscli-skills`?',
               true,
             );
             if (installCodexClaude) {
@@ -153,7 +153,7 @@ export const registerAuthCommands = (context: CliCommandContext): void => {
 
             const installOpenclaw = await promptYesNo(
               rl,
-              'Install Prodinfos skills for OpenClaw via ClawHub?',
+              'Install AnalyticsCLI skills for OpenClaw via ClawHub?',
               false,
             );
             if (installOpenclaw) {

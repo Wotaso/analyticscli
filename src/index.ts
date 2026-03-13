@@ -27,7 +27,7 @@ const resolveCommandPath = (command: Command): string => {
 
   while (cursor) {
     const name = cursor.name();
-    if (name && name !== 'prodinfos') {
+    if (name && name !== 'analyticscli') {
       names.unshift(name);
     }
     cursor = cursor.parent ?? null;
@@ -49,10 +49,10 @@ const emitSelfTrackingEvent = async (
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': String(env.PRODINFOS_SELF_TRACKING_API_KEY),
+        'x-api-key': String(env.ANALYTICSCLI_SELF_TRACKING_API_KEY),
       },
       body: JSON.stringify({
-        projectId: String(env.PRODINFOS_SELF_TRACKING_PROJECT_ID),
+        projectId: String(env.ANALYTICSCLI_SELF_TRACKING_PROJECT_ID),
         sentAt: new Date().toISOString(),
         events: [
           {
@@ -63,11 +63,11 @@ const emitSelfTrackingEvent = async (
             anonId: CLI_ANON_ID,
             properties: {
               ...properties,
-              platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
+              platform: env.ANALYTICSCLI_SELF_TRACKING_PLATFORM,
               nodeVersion: process.version,
               cliVersion: CLI_VERSION,
             },
-            platform: env.PRODINFOS_SELF_TRACKING_PLATFORM,
+            platform: env.ANALYTICSCLI_SELF_TRACKING_PLATFORM,
             appVersion: CLI_VERSION,
             type: 'track',
           },
@@ -102,8 +102,8 @@ const withErrorHandling = async (fn: () => Promise<void>): Promise<void> => {
 
 const program = new Command();
 program
-  .name('prodinfos')
-  .description('Agent-friendly Prodinfos CLI')
+  .name('analyticscli')
+  .description('Agent-friendly AnalyticsCLI CLI')
   .option('--api-url <url>', 'API base URL')
   .option('--token <token>', 'Override auth token for this call')
   .option('--format <format>', 'Output format json|text', 'json')

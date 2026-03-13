@@ -8,26 +8,26 @@ const optionalUrlEnv = z.preprocess((value) => {
 }, z.string().url().optional());
 
 const cliSchema = z.object({
-  PRODINFOS_API_URL: z.string().url().default('http://localhost:4000'),
-  PRODINFOS_CONFIG_DIR: z.string().optional(),
-  PRODINFOS_CLI_ENABLE_WRITE_COMMANDS: z
+  ANALYTICSCLI_API_URL: z.string().url().default('http://localhost:4000'),
+  ANALYTICSCLI_CONFIG_DIR: z.string().optional(),
+  ANALYTICSCLI_CLI_ENABLE_WRITE_COMMANDS: z
     .enum(['true', 'false'])
     .optional()
     .default('false')
     .transform((value) => value === 'true'),
-  PRODINFOS_CLI_ENABLE_DEV_COMMANDS: z
+  ANALYTICSCLI_CLI_ENABLE_DEV_COMMANDS: z
     .enum(['true', 'false'])
     .optional()
     .default('false')
     .transform((value) => value === 'true'),
-  PRODINFOS_SELF_TRACKING_ENABLED: z
+  ANALYTICSCLI_SELF_TRACKING_ENABLED: z
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),
-  PRODINFOS_SELF_TRACKING_ENDPOINT: optionalUrlEnv,
-  PRODINFOS_SELF_TRACKING_PROJECT_ID: z.string().uuid().optional(),
-  PRODINFOS_SELF_TRACKING_API_KEY: z.string().min(8).optional(),
-  PRODINFOS_SELF_TRACKING_PLATFORM: z.string().default('cli'),
+  ANALYTICSCLI_SELF_TRACKING_ENDPOINT: optionalUrlEnv,
+  ANALYTICSCLI_SELF_TRACKING_PROJECT_ID: z.string().uuid().optional(),
+  ANALYTICSCLI_SELF_TRACKING_API_KEY: z.string().min(8).optional(),
+  ANALYTICSCLI_SELF_TRACKING_PLATFORM: z.string().default('cli'),
 });
 
 export type CliEnv = z.infer<typeof cliSchema>;
