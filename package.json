@@ -1,5 +1,5 @@
 {
-  "name": "analyticscli",
+  "name": "@analyticscli/cli",
   "version": "0.1.1",
   "description": "Agent-friendly CLI for AnalyticsCLI analytics queries, exports, feedback and event ingestion.",
   "license": "MIT",

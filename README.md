@@ -11,19 +11,19 @@ Once stable releases exist, `latest` is pinned to the newest stable.
 Global install (recommended for daily usage):
 
 ```bash
-npm install -g analyticscli@preview
+npm install -g @analyticscli/cli@preview
 ```
 
 One-off usage without global install:
 
 ```bash
-npx -y analyticscli@preview --help
+npx -y @analyticscli/cli@preview --help
 ```
 
 When stable releases are available, install without a tag:
 
 ```bash
-npm install -g analyticscli
+npm install -g @analyticscli/cli
 ```
 
 ## Quick Start
