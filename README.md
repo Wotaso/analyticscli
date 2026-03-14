@@ -127,19 +127,9 @@ Global options available on all commands:
 
 - `readonly_token` is for query/export usage.
 - It is different from SDK write keys used for event ingestion.
-- `analyticscli setup` and `analyticscli onboard` can also install public skills:
-  - `analyticscli-cli`
-  - `analyticscli-ts-sdk`
+- `analyticscli setup` and `analyticscli onboard` can also install public skills (`analyticscli-cli`, `analyticscli-ts-sdk`).
 
 ## Releases
 
-Versioning is managed in the private monorepo via Changesets.
-Every CLI change should include a changeset entry (`pnpm changeset`), and CI creates
-the release version PR (`chore(release): version cli`) automatically on `main`.
-
-After that release PR is merged, the public mirror repository can run `Release to npm`.
-Each successful run creates or updates the matching GitHub Release
-(`v<package.json version>`) and links to the published npm version.
-
-Source of truth for this package is the private monorepo path `apps/cli`.
-Public mirror source prefix: `apps/cli`.
+Use npm package versions and GitHub Releases in the public CLI repository as
+the source for release history.
