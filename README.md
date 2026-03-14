@@ -2,9 +2,21 @@
 
 Agent-friendly CLI for querying analytics, exporting events, and working with project-scoped read access in AnalyticsCLI.
 
+Using a coding agent: you can let it handle CLI setup, auth, and query workflows end-to-end with the AnalyticsCLI skills repo:
+https://github.com/Wotaso/analyticscli-skills
+
+The same skills can also be used with OpenClaw.
+
 Current npm release channel: preview / experimental beta.
 If no stable release exists yet, `latest` points to the newest preview.
 Once stable releases exist, `latest` is pinned to the newest stable.
+
+## Skills
+
+Available AnalyticsCLI skills:
+
+- [`analyticscli-cli`](https://github.com/Wotaso/analyticscli-skills/tree/main/skills/analyticscli-cli): CLI setup, auth, query workflows, exports
+- [`analyticscli-ts-sdk`](https://github.com/Wotaso/analyticscli-skills/tree/main/skills/analyticscli-ts-sdk): SDK integration/upgrades for JS/TS, React Native, Expo
 
 ## Install
 
