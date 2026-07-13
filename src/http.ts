@@ -20,7 +20,10 @@ const errorMessage = (error: unknown): string => {
   return String(error);
 };
 
-const createNetworkError = (url: string, error: unknown): Error & { exitCode?: number; payload?: unknown } => {
+const createNetworkError = (
+  url: string,
+  error: unknown,
+): Error & { exitCode?: number; payload?: unknown } => {
   const cause =
     error instanceof Error && 'cause' in error && error.cause
       ? errorMessage(error.cause)
@@ -72,6 +75,29 @@ export const requestApi = async (
     throw createResponseError(response.status, data);
   }
 
+  return data;
+};
+
+export const requestPublicApi = async (
+  method: 'GET' | 'POST',
+  path: string,
+  body: unknown,
+  options: { apiUrl?: string },
+): Promise<unknown> => {
+  const config = await readConfig();
+  const apiUrl = resolveApiUrl(config, options.apiUrl);
+  const url = `${apiUrl}${path}`;
+  const response = await fetchWithNetworkError(url, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
+  });
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok && response.status !== 202 && response.status !== 429) {
+    throw createResponseError(response.status, data);
+  }
   return data;
 };
 

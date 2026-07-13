@@ -60,13 +60,26 @@ npx @analyticscli/cli timeseries --project <project_id> --metric event_count --i
 npx @analyticscli/cli generic --project <project_id> --metric event_count --group-by day,eventName --last 30d
 ```
 
+Create a project without copying an admin token into your terminal:
+
+```bash
+analyticscli projects create \
+  --name "My App" \
+  --env-file .env.local \
+  --env-name EXPO_PUBLIC_ANALYTICSCLI_PUBLISHABLE_API_KEY
+```
+
+The CLI opens a one-time dashboard approval page, creates the project, selects it as the default,
+stores a refreshed account-wide readonly token in the system keychain (or a `0600` config fallback),
+and writes the publishable SDK key to the requested local env file. The short-lived project-admin
+token is never accepted as a CLI flag and is discarded after setup.
+
 ## Troubleshooting Empty States
 
 No projects listed (`analyticscli projects list` returns empty):
 
-1. Create your first project in [dash.analyticscli.com](https://dash.analyticscli.com).
-2. Run `analyticscli projects list`.
-3. Set a default with `analyticscli projects select`.
+1. Run `analyticscli projects create --name "My App"` and approve the one-time browser prompt.
+2. The new project is selected automatically; run `analyticscli projects list` to verify it.
 
 Project exists but no events yet (`analyticscli schema events --project <project_id>` returns empty):
 

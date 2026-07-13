@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapStatusToExitCode, requestApi, requestCollect, requestFileDownload } from '../src/http.js';
+import {
+  mapStatusToExitCode,
+  requestApi,
+  requestCollect,
+  requestFileDownload,
+  requestPublicApi,
+} from '../src/http.js';
 
 test('mapStatusToExitCode maps auth/client/server failures to expected exit codes', () => {
   assert.equal(mapStatusToExitCode(401), 3);
@@ -43,6 +49,32 @@ test('requestCollect sends payload with x-api-key and returns JSON response', as
   }
 });
 
+test('requestPublicApi never attaches the persisted CLI authorization header', async () => {
+  const originalFetch = globalThis.fetch;
+  let headers: HeadersInit | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    headers = init?.headers;
+    return new Response(JSON.stringify({ status: 'authorization_pending' }), {
+      status: 202,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof globalThis.fetch;
+
+  try {
+    const result = await requestPublicApi(
+      'POST',
+      '/v1/auth/cli/device/token',
+      { deviceCode: 'device-code' },
+      { apiUrl: 'https://api.analyticscli.com' },
+    );
+    assert.deepEqual(result, { status: 'authorization_pending' });
+    const normalized = new Headers(headers);
+    assert.equal(normalized.has('authorization'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('requestCollect throws typed error with exit code and payload on API failures', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
@@ -54,7 +86,11 @@ test('requestCollect throws typed error with exit code and payload on API failur
 
   try {
     await assert.rejects(
-      requestCollect('/v1/collect', { events: [] }, { endpoint: 'https://collector.analyticscli.com', apiKey: 'x' }),
+      requestCollect(
+        '/v1/collect',
+        { events: [] },
+        { endpoint: 'https://collector.analyticscli.com', apiKey: 'x' },
+      ),
       (error: unknown) => {
         const typed = error as Error & { exitCode?: number; payload?: unknown };
         assert.equal(typed.message, 'Unauthorized');
@@ -79,7 +115,11 @@ test('requestCollect handles non-JSON error responses gracefully', async () => {
 
   try {
     await assert.rejects(
-      requestCollect('/v1/collect', { events: [] }, { endpoint: 'https://collector.analyticscli.com', apiKey: 'x' }),
+      requestCollect(
+        '/v1/collect',
+        { events: [] },
+        { endpoint: 'https://collector.analyticscli.com', apiKey: 'x' },
+      ),
       (error: unknown) => {
         const typed = error as Error & { exitCode?: number };
         assert.match(typed.message, /Request failed with status 500/);
