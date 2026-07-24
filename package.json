@@ -5,7 +5,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Wotaso/analyticscli-cli.git"
+    "url": "git+https://github.com/Wotaso/analyticscli-monorepo.git",
+    "directory": "apps/cli"
   },
   "type": "module",
   "files": [
