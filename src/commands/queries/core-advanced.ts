@@ -70,6 +70,13 @@ const ACQUISITION_DIMENSIONS = [
   'referrerHost',
   'landingPath',
 ] as const;
+const DEFAULT_ACQUISITION_EVENTS = [
+  'page_view',
+  'landing_page_view',
+  'auth_page_view',
+  'checkout_page_view',
+  'continue_page_view',
+].join(',');
 
 const parseEnumOption = <T extends readonly string[]>(
   value: unknown,
@@ -162,9 +169,13 @@ export const registerAdvancedQueryCommands = (
     .command('acquisition')
     .description('Website acquisition and UTM/referrer summary')
     .option('--project <id>', 'Project ID (optional when a default project is selected)')
-    .option('--metric <metric>', `Metric: ${GENERIC_METRICS.join('|')}`, 'unique_sessions')
+    .option('--metric <metric>', `Metric: ${GENERIC_METRICS.join('|')}`, 'event_count')
     .option('--group-by <dimension>', `Dimension: ${ACQUISITION_DIMENSIONS.join('|')}`, 'utmSource')
-    .option('--events <list>', 'Event-name filters, comma-separated', 'page_view')
+    .option(
+      '--events <list>',
+      'Event-name filters, comma-separated',
+      DEFAULT_ACQUISITION_EVENTS,
+    )
     .option('--limit <n>', 'Row limit (policy capped at 200)', '50')
     .option('--order-by <mode>', `Ordering: ${GENERIC_ORDER_BY.join('|')}`, 'value_desc')
     .option('--last <duration>', 'Time range like 30d', '30d')
@@ -200,6 +211,12 @@ export const registerAdvancedQueryCommands = (
             minItems: 1,
             maxItems: 50,
           });
+          const dataQualityWarnings =
+            metric !== 'event_count' && eventNames.includes('landing_page_view')
+              ? [
+                  'landing_page_view may be privacy-safe aggregate traffic with one unlinkable identity per event; unique session/user counts can equal pageview counts and must not be interpreted as people.',
+                ]
+              : [];
 
           const payload = (await requestApi(
             'POST',
@@ -246,6 +263,7 @@ export const registerAdvancedQueryCommands = (
               `events: ${eventNames.join(', ')}`,
               `matched records: ${matchedRecords}`,
               `rows: ${payload.rows.length}/${payload.limit}`,
+              ...dataQualityWarnings.map((warning) => `warning: ${warning}`),
             ].join('\n');
             const table = renderTable(
               [groupBy, 'value'],
@@ -255,7 +273,17 @@ export const registerAdvancedQueryCommands = (
             return;
           }
 
-          print(root.format, withMatchedRecords({ kind: 'acquisition', ...payload }, matchedRecords));
+          print(
+            root.format,
+            withMatchedRecords(
+              {
+                kind: 'acquisition',
+                ...payload,
+                dataQualityWarnings,
+              },
+              matchedRecords,
+            ),
+          );
         });
       },
     );

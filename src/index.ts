@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { registerAuthCommands } from './commands/auth.js';
+import { registerAgentCommands } from './commands/agent.js';
 import type { CliCommandContext, RootCliOptions } from './commands/context.js';
 import { registerDevCommands } from './commands/dev.js';
 import { registerEventCommands } from './commands/events.js';
 import { registerFeedbackCommands } from './commands/feedback.js';
+import { registerMcpCommand } from './commands/mcp.js';
 import { registerProjectCommands } from './commands/projects.js';
 import { registerQueryCommands } from './commands/queries/index.js';
 import {
@@ -43,6 +45,33 @@ const resolveCommandPath = (command: Command): string => {
   }
 
   return names.join(' ') || 'unknown';
+};
+
+const resolveSemanticSuccessEvent = (commandPath: string): string | null => {
+  const rootQueryCommands = new Set([
+    'acquisition',
+    'breakdown',
+    'conversion-after',
+    'funnel',
+    'generic',
+    'goal-completion',
+    'paths-after',
+    'retention',
+    'survey',
+    'timeseries',
+  ]);
+  if (commandPath === 'agent brief') return 'agent:brief_generated';
+  if (commandPath === 'projects create') return 'activation:project_created';
+  if (commandPath === 'login') return 'activation:cli_authenticated';
+  if (commandPath === 'setup' || commandPath === 'onboard') return 'activation:cli_onboarded';
+  if (
+    commandPath === 'schema events'
+    || commandPath.startsWith('get ')
+    || rootQueryCommands.has(commandPath)
+  ) {
+    return 'activation:query_succeeded';
+  }
+  return null;
 };
 
 const sendLegacySelfTrackingEvent = async (
@@ -189,6 +218,7 @@ const withErrorHandling = async (fn: () => Promise<void>): Promise<void> => {
 const program = new Command();
 program
   .name('analyticscli')
+  .version(CLI_VERSION)
   .description('Agent-friendly AnalyticsCLI CLI')
   .option('--api-url <url>', 'Override API base URL for staging/local development')
   .option('--readonly-token <token>', 'Override readonly token for this call')
@@ -228,6 +258,11 @@ const context: CliCommandContext = {
 program.hook('preAction', async (_thisCommand, actionCommand) => {
   activeCommandPath = resolveCommandPath(actionCommand);
   activeCommandStartMs = Date.now();
+  // MCP stdio reserves stdout for protocol frames. Skip all best-effort CLI
+  // notices and telemetry for this long-running transport process.
+  if (activeCommandPath === 'mcp') {
+    return;
+  }
   const root = getRootOptions();
   await maybeAutoRefreshSkills(activeCommandPath).catch(() => {
     // Auto-refresh is best effort.
@@ -250,17 +285,34 @@ program.hook('preAction', async (_thisCommand, actionCommand) => {
 
 program.hook('postAction', async (_thisCommand, actionCommand) => {
   const root = getRootOptions();
+  const commandPath = resolveCommandPath(actionCommand);
+  if (commandPath === 'mcp') {
+    return;
+  }
   await emitSelfTrackingEvent('cli:command_succeeded', {
-    command: resolveCommandPath(actionCommand),
+    command: commandPath,
     durationMs: Date.now() - activeCommandStartMs,
   }, {
     apiUrl: root.apiUrl,
     accessToken: root.accessToken,
     projectId: root.project,
   });
+  const semanticEvent = resolveSemanticSuccessEvent(commandPath);
+  if (semanticEvent) {
+    await emitSelfTrackingEvent(semanticEvent, {
+      command: commandPath,
+      durationMs: Date.now() - activeCommandStartMs,
+    }, {
+      apiUrl: root.apiUrl,
+      accessToken: root.accessToken,
+      projectId: root.project,
+    });
+  }
 });
 
 registerAuthCommands(context);
+registerAgentCommands(context);
+registerMcpCommand(context);
 registerProjectCommands(context);
 registerQueryCommands(context);
 registerFeedbackCommands(context);

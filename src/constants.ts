@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { readCliEnv } from './env.js';
 import {
   ONBOARDING_EVENTS,
@@ -13,7 +14,13 @@ export const env = readCliEnv();
 export const CLI_WRITE_COMMANDS_ENABLED = env.ANALYTICSCLI_CLI_ENABLE_WRITE_COMMANDS;
 export const CLI_DEV_COMMANDS_ENABLED = env.ANALYTICSCLI_CLI_ENABLE_DEV_COMMANDS;
 
-export const CLI_VERSION = '0.1.3';
+const packageManifest = createRequire(import.meta.url)('../package.json') as {
+  version: string;
+};
+
+// Keep runtime telemetry, update checks, Commander output, and release tags on
+// the same source of truth. Changesets updates package.json during releases.
+export const CLI_VERSION = packageManifest.version;
 export const SKILL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const SKILL_SYNC_TIMEOUT_MS = 4000;
 export const CLI_VERSION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
